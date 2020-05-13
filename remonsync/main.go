@@ -20,14 +20,12 @@ import (
 )
 
 var (
-	// sync count per second
-	limit int
-
-	rURLs RedisURLs
-	mURL  MongoURL
-
+	// runtime variables
 	rClients []*redis.Client
 	mClient  *mongo.Client
+
+	limitCnt  int32
+	limitCond *sync.Cond
 )
 
 type RedisURLs []string
@@ -81,11 +79,6 @@ func (m *MongoURL) Set(url string) (err error) {
 	return nil
 }
 
-var (
-	limitCnt  int32
-	limitCond *sync.Cond
-)
-
 func OnSave(key string, version int64) {
 	log.Infof("save: %s %d", key, version)
 	if limit > 0 {
@@ -96,6 +89,7 @@ func OnSave(key string, version int64) {
 		limitCond.L.Unlock()
 	}
 }
+
 func OnError(err error) error {
 	log.Error(err)
 	time.Sleep(time.Second)
@@ -146,21 +140,36 @@ func Serve() {
 	<-quit
 }
 
+var (
+	// options
+	limit   int       // -limit
+	verbose bool      // -verbose
+	rURLs   RedisURLs // -reids
+	mURL    MongoURL  // -mongo
+)
+
 func main() {
 	flag.IntVar(&limit, "limit", 0, "sync count limit per second")
+	flag.BoolVar(&verbose, "verbose", false, "verbose log")
 	flag.Var(&rURLs, "r", "redis url")
 	flag.Var(&rURLs, "redis", "redis url")
 	flag.Var(&mURL, "m", "mongo url")
 	flag.Var(&mURL, "mongo", "mongo url")
 	flag.Parse()
 
+	logOpts := []log.ConsoleLoggerOption{
+		log.ConsoleLoggerWithColor(),
+	}
+	if verbose {
+		logOpts = append(logOpts, log.ConsoleLoggerWithLevel(log.DebugLevel))
+	}
+	log.Init(log.NewConsoleLogger(logOpts...))
+
 	if len(rURLs) == 0 {
-		fmt.Fprintln(os.Stderr, "at least one redis url should be specified")
-		os.Exit(1)
+		log.Fatal("at least one redis url should be specified")
 	}
 	if len(mURL) == 0 {
-		fmt.Fprintln(os.Stderr, "mongo url should be specified")
-		os.Exit(1)
+		log.Fatal("mongo url should be specified")
 	}
 	Serve()
 }
