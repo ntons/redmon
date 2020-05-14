@@ -49,6 +49,8 @@ func (d *_Data) getMailList() (list []Mail) {
 	return
 }
 
+type Client = ReMon
+
 type ReMon struct {
 	// options
 	o *options
