@@ -77,38 +77,24 @@ func WithKeyMappingStrategyFunc(v func(string) (_, _, _ string)) Option {
 	}}
 }
 
-// get options
-type getOptions struct {
-	addOnNotExist      bool
-	addOnNotExistValue string
+// push options
+type pushOptions struct {
+	capacity      int
+	addOnNotExist bool
 }
 
-type GetOption interface {
-	apply(o *getOptions)
+type PushOption interface {
+	apply(o *pushOptions)
 }
 
-type funcGetOption struct {
-	f func(o *getOptions)
+type funcPushOption struct {
+	f func(o *pushOptions)
 }
 
-func (f funcGetOption) apply(o *getOptions) {
+func (f funcPushOption) apply(o *pushOptions) {
 	f.f(o)
 }
 
-func AddOnNotExist(v string) GetOption {
-	return funcGetOption{func(o *getOptions) {
-		o.addOnNotExist = true
-		o.addOnNotExistValue = v
-	}}
-}
-
-func applyOptions(o *options, opts []Option) {
-	for _, opt := range opts {
-		opt.apply(o)
-	}
-}
-func applyGetOptions(o *getOptions, opts []GetOption) {
-	for _, opt := range opts {
-		opt.apply(o)
-	}
+func WithCapacity(capacity int) PushOption {
+	return funcPushOption{func(o *pushOptions) { o.capacity = capacity }}
 }

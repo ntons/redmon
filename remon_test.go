@@ -39,16 +39,38 @@ func Dial(t *testing.T) *ReMon {
 
 func TestLock(t *testing.T) {
 	x := Dial(t)
-	func() {
-		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-		defer cancel()
-		fmt.Println(x.Get(ctx, "aa:bb:cc", AddOnNotExist("hello")))
-		fmt.Println(x.Stat())
-	}()
 
 	func() {
+		fmt.Println("Set")
 		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 		defer cancel()
 		fmt.Println(x.Set(ctx, "aa:bb:cc", "world"))
+		fmt.Println(x.getDataFromRedis(ctx, "aa:bb:cc"))
+	}()
+
+	func() {
+		fmt.Println("Get")
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		fmt.Println(x.Get(ctx, "aa:bb:cc"))
+		fmt.Println(x.getDataFromRedis(ctx, "aa:bb:cc"))
+	}()
+
+	func() {
+		fmt.Println("PushMail")
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		fmt.Println(x.PushMail(ctx, "aa:bb:cc", "this is a mail"))
+		fmt.Println(x.getDataFromRedis(ctx, "aa:bb:cc"))
+	}()
+
+	func() {
+		fmt.Println("PullMail:")
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		list, err := x.ListMail(ctx, "aa:bb:cc")
+		fmt.Println(err)
+		fmt.Println(x.PullMail(ctx, "aa:bb:cc", list[0].Id, list[len(list)-1].Id))
+		fmt.Println(x.getDataFromRedis(ctx, "aa:bb:cc"))
 	}()
 }
