@@ -1,10 +1,32 @@
 package remon
 
 import (
-	"fmt"
-
 	"github.com/go-redis/redis/v7"
 )
+
+type scripter interface { // redis.scripter
+	Eval(script string, keys []string, args ...interface{}) *redis.Cmd
+	EvalSha(sha1 string, keys []string, args ...interface{}) *redis.Cmd
+	ScriptExists(hashes ...string) *redis.BoolSliceCmd
+	ScriptLoad(script string) *redis.StringCmd
+}
+
+var scripts []*redis.Script
+
+func newScript(src string) *redis.Script {
+	script := redis.NewScript(src)
+	scripts = append(scripts, script)
+	return script
+}
+
+func ScriptLoad(r scripter) (err error) {
+	for _, script := range scripts {
+		if _, err = script.Load(r).Result(); err != nil {
+			return
+		}
+	}
+	return
+}
 
 var (
 	luaDefDataEnc = `
@@ -30,7 +52,7 @@ end`
 	// KEYS   = { KEY }
 	// ARGV   = { BUF, PX }
 	// RETURN = BUF
-	luaLoadData = redis.NewScript(`
+	luaLoadData = newScript(`
 local buf = redis.call("GET", KEYS[1])
 if buf and cmsgpack.unpack(buf).version >= cmsgpack.unpack(ARGV[1]).version then return buf end
 redis.call("SET", KEYS[1], ARGV[1], "PX", ARGV[2])
@@ -39,7 +61,7 @@ return ARGV[1]`)
 	// KEYS   = { KEY }
 	// ARGV   = { VALUE }
 	// RETURN = nil | 0
-	luaSetValue = redis.NewScript(luaDefGetData + luaDefSetData + `
+	luaSetValue = newScript(luaDefGetData + luaDefSetData + `
 local data = get_data()
 if not data then return nil end
 if data.value ~= ARGV[1] then
@@ -49,16 +71,18 @@ end
 return 0`)
 
 	// KEYS   = { KEY }
-	// ARGV   = { VALUE, CAPACITY }
+	// ARGV   = { VALUE, ..., CAPACITY }
 	// RETURN = nil | 0
-	luaPushMail = redis.NewScript(luaDefGetData + luaDefSetData + `
+	luaPushMail = newScript(luaDefGetData + luaDefSetData + `
 local data = get_data()
 if not data then return nil end
-data.mailbox.inc = data.mailbox.inc + 1
-local id = string.format("x%08x", data.mailbox.inc)
-data.mailbox.que[#data.mailbox.que+1] = id
-data.mailbox.dict[id] = ARGV[1]
-local capacity = tonumber(ARGV[2])
+for i=1,#ARGV-1,1 do
+    data.mailbox.inc = data.mailbox.inc + 1
+    local id = string.format("x%08x", data.mailbox.inc)
+    data.mailbox.que[#data.mailbox.que+1] = id
+    data.mailbox.dict[id] = ARGV[i]
+end
+local capacity = tonumber(ARGV[#ARGV])
 while capacity > 0 and #data.mailbox.que > capacity do
     data.mailbox.dict[data.mailbox.que[1]] = nil
     table.remove(data.mailbox.que, 1)
@@ -70,7 +94,7 @@ return 0`)
 	// KEYS   = { KEY }
 	// ARGV   = { ID ... }
 	// RETURN = nil | 0
-	luaPullMail = redis.NewScript(luaDefGetData + luaDefSetData + `
+	luaPullMail = newScript(luaDefGetData + luaDefSetData + `
 local data = get_data()
 if not data then return nil end
 local M, N = #ARGV, #data.mailbox.que
@@ -109,6 +133,28 @@ end
 if #data.mailbox.que ~= N then set_data(data) end
 return N - #data.mailbox.que`)
 
+	// KEYS   = { KEY }
+	// ARGV   = { SRC }
+	// RETURN = { RET, NEW_VALUE }
+	luaEvalVarJSON = newScript(luaDefGetData + luaDefSetData + `
+local data = get_data()
+if not data then return nil end
+local var = {}
+if #data.value > 0 then var = cjson.decode(data.value) end
+local sandbox = assert(loadstring(ARGV[1]))
+setfenv(sandbox, var)
+local ret = sandbox()
+if ret == nil or ret == true then ret = 0 end
+if type(ret) ~= "number" then ret = -1 end
+if ret == 0 then
+    local value = cjson.encode(var)
+    if value ~= data.value then
+	    data.value = value
+	    set_data(data)
+	end
+end
+return { ret, data.value }`)
+
 	// peek the first dirty record
 	// KEYS   = {}
 	// ARGV   = {}
@@ -123,13 +169,13 @@ if not buf then
     return nil
 end
 return { key, buf }`
-	luaPeekDirty = redis.NewScript(luaPeekDirtySrc)
+	luaPeekDirty = newScript(luaPeekDirtySrc)
 
 	// clean the first dirty record then get the next
 	// KEYS   = { KEY }
 	// ARGV   = { VERSION, TTL }
 	// RETURN = nil | { KEY, BUF }
-	luaNextDirty = redis.NewScript(`
+	luaNextDirty = newScript(`
 if redis.call("LINDEX",":DIRTYQUE", -1) == KEYS[1] then
     local buf = redis.call("GET", KEYS[1])
     if not buf then
@@ -147,21 +193,3 @@ if redis.call("LINDEX",":DIRTYQUE", -1) == KEYS[1] then
     end
 end` + luaPeekDirtySrc)
 )
-
-func ScriptLoad(rdb RedisClient) (err error) {
-	scripts := []*redis.Script{
-		luaLoadData,
-		luaSetValue,
-		luaPushMail,
-		luaPullMail,
-		luaPeekDirty,
-		luaNextDirty,
-	}
-	for _, script := range scripts {
-		if _, err = script.Load(rdb).Result(); err != nil {
-			fmt.Println(script)
-			return
-		}
-	}
-	return
-}

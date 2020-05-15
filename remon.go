@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"strings"
 	"time"
 
 	"github.com/go-redis/redis/v7"
@@ -13,14 +15,29 @@ import (
 	"go.mongodb.org/mongo-driver/mongo"
 )
 
+type RedisClient interface {
+	scripter
+	Pipeline() redis.Pipeliner
+	ProcessContext(context.Context, redis.Cmder) error
+}
+
 var (
 	// exported errors
 	ErrNotExist = errors.New("remon: not exist")
 )
 
+func isBusyError(err error) bool {
+	return err != nil && strings.HasPrefix(err.Error(), "BUSY")
+}
+
 type Mail struct {
 	Id    string
 	Value string
+}
+
+type MailBytes struct {
+	Id    string
+	Value []byte
 }
 
 type _Data struct {
@@ -49,13 +66,13 @@ func (d *_Data) getMailList() (list []Mail) {
 	return
 }
 
-type Client = ReMon
+type DB = ReMon
 
 type ReMon struct {
 	// options
 	o *options
 	// redis client
-	r RedisClientWithContext
+	r RedisClient
 	// mongo client
 	m *mongo.Client
 	// stat
@@ -67,11 +84,7 @@ func New(r RedisClient, m *mongo.Client, opts ...Option) (x *ReMon) {
 	for _, opt := range opts {
 		opt.apply(o)
 	}
-	return &ReMon{
-		o: o,
-		r: NewRedisClientWithContext(r),
-		m: m,
-	}
+	return &ReMon{o: o, r: r, m: m}
 }
 
 func (x *ReMon) Stat() *Stat { return &x.stat }
@@ -86,6 +99,14 @@ func (x *ReMon) Get(ctx context.Context, key string) (value string, err error) {
 			return
 		}
 		value = data.Value
+	}
+	return
+}
+func (x *ReMon) GetBytes(
+	ctx context.Context, key string) (value []byte, err error) {
+	s, err := x.Get(ctx, key)
+	if err == nil {
+		value = tunsafe.StringToBytes(s)
 	}
 	return
 }
@@ -106,29 +127,16 @@ func (x *ReMon) Set(ctx context.Context, key, value string) (err error) {
 	}
 	return
 }
-
-func (x *ReMon) ListMail(
-	ctx context.Context, key string) (list []Mail, err error) {
-	if list, err = x.getMailListFromRedis(ctx, key); err != nil {
-		if err != redis.Nil {
-			return
-		}
-		var data _Data
-		if data, err = x.loadDataFromMongoToRedis(ctx, key); err != nil {
-			return
-		}
-		list = data.getMailList()
-	}
-	return
+func (x *ReMon) SetBytes(
+	ctx context.Context, key string, value []byte) (err error) {
+	return x.Set(ctx, key, tunsafe.BytesToString(value))
 }
 
-func (x *ReMon) PushMail(
-	ctx context.Context, key, value string, opts ...PushOption) (err error) {
-	var o = &pushOptions{}
-	for _, opt := range opts {
-		opt.apply(o)
-	}
-	if err = x.pushMailToRedis(ctx, key, value, o); err != nil {
+// eval custom lua script on json value
+// if src cannot be trusted, set lua-time-limit to a small value
+func (x *ReMon) EvalVarJSON(
+	ctx context.Context, key, src string) (ret int, value string, err error) {
+	if ret, value, err = x.evalVarJSON(ctx, key, src); err != nil {
 		if err != redis.Nil {
 			return
 		}
@@ -136,26 +144,8 @@ func (x *ReMon) PushMail(
 			if err != ErrNotExist {
 				return
 			}
-			if !o.addOnNotExist {
-				return
-			}
 		}
-		if err = x.pushMailToRedis(ctx, key, value, o); err != nil {
-			return
-		}
-	}
-	return
-}
-
-func (x *ReMon) PullMail(ctx context.Context, key string, ids ...string) (n int, err error) {
-	if n, err = x.pullMailFromRedis(ctx, key, ids); err != nil {
-		if err != redis.Nil {
-			return
-		}
-		if _, err = x.loadDataFromMongoToRedis(ctx, key); err != nil {
-			return
-		}
-		if n, err = x.pullMailFromRedis(ctx, key, ids); err != nil {
+		if ret, value, err = x.evalVarJSON(ctx, key, src); err != nil {
 			return
 		}
 	}
@@ -163,9 +153,10 @@ func (x *ReMon) PullMail(ctx context.Context, key string, ids ...string) (n int,
 }
 
 // redis access
-func (x *ReMon) getDataFromRedis(ctx context.Context, key string) (data _Data, err error) {
-	s, err := x.r.WithContext(ctx).Get(key).Result()
-	if err != nil {
+func (x *ReMon) getDataFromRedis(
+	ctx context.Context, key string) (data _Data, err error) {
+	cmd := redis.NewStringCmd("get", key)
+	if err = x.r.ProcessContext(ctx, cmd); err != nil {
 		if err == redis.Nil {
 			x.stat.RedisMiss++
 		} else {
@@ -175,13 +166,28 @@ func (x *ReMon) getDataFromRedis(ctx context.Context, key string) (data _Data, e
 	} else {
 		x.stat.RedisHit++
 	}
-	if err = msgpack.Unmarshal(tunsafe.StringToBytes(s), &data); err != nil {
+	for isBusyError(err) {
+		pipe := x.r.Pipeline()
+		pipe.ScriptKill()
+		cmd = pipe.Get(key)
+		if _, err = pipe.ExecContext(ctx); err != nil {
+			if err == redis.Nil {
+				x.stat.RedisMiss++
+			} else {
+				x.stat.RedisError++
+			}
+		} else {
+			x.stat.RedisHit++
+		}
+	}
+	if err = msgpack.Unmarshal(tunsafe.StringToBytes(cmd.Val()), &data); err != nil {
 		return
 	}
 	return
 }
 
-func (x *ReMon) getValueFromRedis(ctx context.Context, key string) (value string, err error) {
+func (x *ReMon) getValueFromRedis(
+	ctx context.Context, key string) (value string, err error) {
 	data, err := x.getDataFromRedis(ctx, key)
 	if err != nil {
 		return
@@ -195,10 +201,18 @@ func (x *ReMon) getValueFromRedis(ctx context.Context, key string) (value string
 }
 
 func (x *ReMon) eval(
-	lua *redis.Script, ctx context.Context, key string, args ...interface{}) (
-	r *redis.Cmd) {
-	r = lua.EvalSha(x.r.WithContext(ctx), []string{key}, args...)
-	if _, err := r.Result(); err != nil {
+	ctx context.Context, lua *redis.Script, key string, args ...interface{}) (
+	cmd *redis.Cmd) {
+	cmdArgs := make([]interface{}, 4, 4+len(args))
+	cmdArgs[0] = "evalsha"
+	cmdArgs[1] = lua.Hash()
+	cmdArgs[2] = 1
+	cmdArgs[3] = key
+	cmdArgs = append(cmdArgs, args...)
+	cmd = redis.NewCmd(cmdArgs...)
+
+	var err error
+	if err = x.r.ProcessContext(ctx, cmd); err != nil {
 		if err == redis.Nil {
 			x.stat.RedisMiss++
 		} else {
@@ -206,6 +220,21 @@ func (x *ReMon) eval(
 		}
 	} else {
 		x.stat.RedisHit++
+	}
+
+	for isBusyError(err) {
+		pipe := x.r.Pipeline()
+		pipe.ScriptKill()
+		cmd = pipe.EvalSha(lua.Hash(), []string{key}, args...)
+		if _, err = pipe.ExecContext(ctx); err != nil {
+			if err == redis.Nil {
+				x.stat.RedisMiss++
+			} else {
+				x.stat.RedisError++
+			}
+		} else {
+			x.stat.RedisHit++
+		}
 	}
 	return
 }
@@ -217,40 +246,28 @@ func (x *ReMon) addValueToRedis(
 
 func (x *ReMon) setValueToRedis(
 	ctx context.Context, key, value string) (err error) {
-	if _, err = x.eval(luaSetValue, ctx, key, value).Result(); err != nil {
-		return
-	}
-	return
+	return x.eval(ctx, luaSetValue, key, value).Err()
 }
 
-func (x *ReMon) getMailListFromRedis(
-	ctx context.Context, key string) (list []Mail, err error) {
-	data, err := x.getDataFromRedis(ctx, key)
+func (x *ReMon) evalVarJSON(
+	ctx context.Context, key, src string) (ret int, value string, err error) {
+	r, err := x.eval(ctx, luaEvalVarJSON, key, src).Result()
 	if err != nil {
 		return
 	}
-	if data.Version == 0 {
-		err = ErrNotExist
+	v, ok := r.([]interface{})
+	if !ok {
+		err = fmt.Errorf("bad script return type: %T", r)
 		return
 	}
-	list = data.getMailList()
-	return
-}
-func (x *ReMon) pushMailToRedis(
-	ctx context.Context, key, value string, o *pushOptions) (err error) {
-	if _, err = x.eval(
-		luaPushMail, ctx, key, value, o.capacity).Result(); err != nil {
+	if i64, ok := v[0].(int64); !ok {
+		err = fmt.Errorf("bad script return type: %T", v[0])
 		return
+	} else {
+		ret = int(i64)
 	}
-	return
-}
-func (x *ReMon) pullMailFromRedis(
-	ctx context.Context, key string, ids []string) (n int, err error) {
-	args := make([]interface{}, len(ids))
-	for i, id := range ids {
-		args[i] = id
-	}
-	if n, err = x.eval(luaPullMail, ctx, key, args...).Int(); err != nil {
+	if value, ok = v[1].(string); !ok {
+		err = fmt.Errorf("bad script return type: %T", v[1])
 		return
 	}
 	return
@@ -280,7 +297,7 @@ func (x *ReMon) loadDataFromMongoToRedis(
 		x.stat.DataError++
 		return
 	}
-	s, err := x.eval(luaLoadData, ctx, key,
+	s, err := x.eval(ctx, luaLoadData, key,
 		tunsafe.BytesToString(b),                // ARGV[1]
 		int64(x.o.volatileTTL/time.Millisecond), // ARGV[2]
 	).Text()
