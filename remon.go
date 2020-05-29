@@ -283,6 +283,7 @@ func (x *ReMon) loadDataFromMongoToRedis(
 			x.stat.MongoError++
 			return
 		}
+		err = nil
 	}
 	if data.Mailbox.Que == nil {
 		data.Mailbox.Que = []string{}
