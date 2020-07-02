@@ -32,7 +32,6 @@ func Dial(t *testing.T) *ReMon {
 	if err := m.Connect(ctx); err != nil {
 		t.Fatal("failed to connect mongo server:", err)
 	}
-
 	/*
 		if err := ScriptLoad(r); err != nil {
 			t.Fatal("failed to script load:", err)
@@ -63,24 +62,24 @@ func TestReMon(t *testing.T) {
 
 }
 
-func TestMail(t *testing.T) {
+func TestList(t *testing.T) {
 	x := Dial(t)
 
 	func() {
-		fmt.Println("PushMail")
+		fmt.Println("PushToList")
 		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 		defer cancel()
-		fmt.Println(x.PushOneMail(ctx, "aa:bb:cc", "this is a mail"))
+		fmt.Println(x.Push(ctx, "aa:bb:cc", []string{"this is a elem"}))
 		fmt.Println(x.getDataFromRedis(ctx, "aa:bb:cc"))
 	}()
 
 	func() {
-		fmt.Println("PullMail:")
+		fmt.Println("PullFromList:")
 		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 		defer cancel()
-		list, err := x.ListMail(ctx, "aa:bb:cc")
+		list, err := x.GetList(ctx, "aa:bb:cc")
 		fmt.Println(err)
-		fmt.Println(x.PullMail(ctx, "aa:bb:cc", []string{list[0].Id, list[len(list)-1].Id}))
+		fmt.Println(x.Pull(ctx, "aa:bb:cc", []string{list[0].Id, list[len(list)-1].Id}))
 		fmt.Println(x.getDataFromRedis(ctx, "aa:bb:cc"))
 	}()
 }
@@ -108,7 +107,20 @@ func TestEvalVar(t *testing.T) {
 		fmt.Println("EvalVar")
 		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 		defer cancel()
+		fmt.Println(x.EvalVarJSON(ctx, "aa:bb:dd", "something=100"))
+		fmt.Println(x.getDataFromRedis(ctx, "aa:bb:dd"))
+	}()
+
+	func() {
+		fmt.Println("EvalVar")
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
 		fmt.Println(x.EvalVarJSON(ctx, "aa:bb:dd", "while true do end"))
+	}()
+	func() {
+		fmt.Println("EvalVar")
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
 		fmt.Println(x.getDataFromRedis(ctx, "aa:bb:dd"))
 	}()
 }

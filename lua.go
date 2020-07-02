@@ -33,12 +33,14 @@ var (
 local encode_data(data) = function()
     return cmsgpack.pack(data)
 end`
+
 	luaDefGetData = `
 local get_data = function()
     local buf = redis.call("GET", KEYS[1])
     if not buf then return nil end
     return cmsgpack.unpack(buf)
 end`
+
 	luaDefSetData = `
 local set_data = function(data)
     data.version = data.version + 1
@@ -47,6 +49,7 @@ local set_data = function(data)
         redis.call("LPUSH", ":DIRTYQUE", KEYS[1])
     end
 end`
+
 	// load cache from mongo
 	// newer version will be accepted while cache data exists
 	// KEYS   = { KEY }
@@ -73,19 +76,19 @@ return 0`)
 	// KEYS   = { KEY }
 	// ARGV   = { VALUE, ..., CAPACITY }
 	// RETURN = nil | 0
-	luaPushMail = newScript(luaDefGetData + luaDefSetData + `
+	luaPush = newScript(luaDefGetData + luaDefSetData + `
 local data = get_data()
 if not data then return nil end
 for i=1,#ARGV-1,1 do
-    data.mailbox.inc = data.mailbox.inc + 1
-    local id = string.format("x%08x", data.mailbox.inc)
-    data.mailbox.que[#data.mailbox.que+1] = id
-    data.mailbox.dict[id] = ARGV[i]
+    data.list.inc = data.list.inc + 1
+    local id = string.format("x%08x", data.list.inc)
+    data.list.que[#data.list.que+1] = id
+    data.list.map[id] = ARGV[i]
 end
 local capacity = tonumber(ARGV[#ARGV])
-while capacity > 0 and #data.mailbox.que > capacity do
-    data.mailbox.dict[data.mailbox.que[1]] = nil
-    table.remove(data.mailbox.que, 1)
+while capacity > 0 and #data.list.que > capacity do
+    data.list.map[data.list.que[1]] = nil
+    table.remove(data.list.que, 1)
 end
 set_data(data)
 return 0`)
@@ -94,22 +97,22 @@ return 0`)
 	// KEYS   = { KEY }
 	// ARGV   = { ID ... }
 	// RETURN = nil | 0
-	luaPullMail = newScript(luaDefGetData + luaDefSetData + `
+	luaPull = newScript(luaDefGetData + luaDefSetData + `
 local data = get_data()
 if not data then return nil end
-local M, N = #ARGV, #data.mailbox.que
+local M, N = #ARGV, #data.list.que
 if M  * math.log(N)/math.log(2) < M * math.log(M)/math.log(2) + M + N then
     for _, id in ipairs(ARGV) do
-        local min, max = 1, #data.mailbox.que
+        local min, max = 1, #data.list.que
         while min <= max do
             local mid = math.floor((min+max)/2)
-            if data.mailbox.que[mid] < id then
+            if data.list.que[mid] < id then
                 min = mid + 1
-            elseif data.mailbox.que[mid] > id then
+            elseif data.list.que[mid] > id then
                 max = mid - 1
             else
-                table.remove(data.mailbox.que, mid)
-                data.mailbox.dict[id] = nil
+                table.remove(data.list.que, mid)
+                data.list.map[id] = nil
                 break
             end
         end
@@ -119,19 +122,19 @@ else
     table.sort(ARGV)
     local i, j = M, N
     while i > 0 and j > 0 do
-        if ARGV[i] > data.mailbox.que[j] then
+        if ARGV[i] > data.list.que[j] then
             i = i - 1
-        elseif ARGV[i] < data.mailbox.que[j] then
+        elseif ARGV[i] < data.list.que[j] then
             j = j - 1
         else
-            table.remove(data.mailbox.que, j)
-            data.mailbox.dict[ARGV[i]] = nil
+            table.remove(data.list.que, j)
+            data.list.map[ARGV[i]] = nil
             i, j = i - 1, j - 1
         end
     end
 end
-if #data.mailbox.que ~= N then set_data(data) end
-return N - #data.mailbox.que`)
+if #data.list.que ~= N then set_data(data) end
+return N - #data.list.que`)
 
 	// KEYS   = { KEY }
 	// ARGV   = { SRC }
@@ -169,6 +172,7 @@ if not buf then
     return nil
 end
 return { key, buf }`
+
 	luaPeekDirty = newScript(luaPeekDirtySrc)
 
 	// clean the first dirty record then get the next

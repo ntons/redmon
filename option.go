@@ -39,6 +39,10 @@ type options struct {
 	volatileTTL time.Duration
 	// map redis key to mongodb (database,collection,_id)
 	keyMappingStrategy KeyMappingStrategy
+
+	/// for sync only
+	// sync limit count per second, 0 means unlimited
+	syncLimit int32
 }
 
 func newOptions() *options {
@@ -75,6 +79,10 @@ func WithKeyMappingStrategyFunc(v func(string) (_, _, _ string)) Option {
 	return funcOption{func(o *options) {
 		o.keyMappingStrategy = funcKeyMappingStrategy{v}
 	}}
+}
+
+func WithSyncLimit(v int) Option {
+	return funcOption{func(o *options) { o.syncLimit = int32(v) }}
 }
 
 // push options
