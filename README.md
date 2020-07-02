@@ -1,2 +1,2 @@
 # remon
-redis cached mongodb based nosql database interface
+redis cached mongodb based nosql database
