@@ -10,7 +10,6 @@ import (
 	"time"
 
 	"github.com/go-redis/redis/v7"
-	"github.com/ntons/tongo/tunsafe"
 	"github.com/vmihailenco/msgpack/v4"
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/mongo"
@@ -188,7 +187,7 @@ func (x *Sync) getResult(v interface{}) (key string, data Data, err error) {
 		err = fmt.Errorf("unexpected return value type: %T", a[1])
 		return
 	}
-	if err = msgpack.Unmarshal(tunsafe.StringToBytes(b), &data); err != nil {
+	if err = msgpack.Unmarshal(s2b(b), &data); err != nil {
 		return
 	}
 	return key, data, nil

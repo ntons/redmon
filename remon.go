@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"github.com/go-redis/redis/v7"
-	"github.com/ntons/tongo/tunsafe"
 	"github.com/vmihailenco/msgpack/v4"
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/mongo"
@@ -222,8 +221,7 @@ func (x *ReMon) getDataFromRedis(ctx context.Context, key string) (data Data, er
 	if err != nil {
 		return
 	}
-	if err = msgpack.Unmarshal(
-		tunsafe.StringToBytes(cmd.Val()), &data); err != nil {
+	if err = msgpack.Unmarshal(s2b(cmd.Val()), &data); err != nil {
 		return
 	}
 	return
@@ -337,13 +335,13 @@ func (x *ReMon) loadDataFromMongoToRedis(ctx context.Context, key string) (data 
 		return
 	}
 	s, err := x.eval(ctx, luaLoadData, key,
-		tunsafe.BytesToString(b),                // ARGV[1]
+		b2s(b), // ARGV[1]
 		int64(x.o.volatileTTL/time.Millisecond), // ARGV[2]
 	).Text()
 	if err != nil {
 		return
 	}
-	if err = msgpack.Unmarshal(tunsafe.StringToBytes(s), &data); err != nil {
+	if err = msgpack.Unmarshal(s2b(s), &data); err != nil {
 		x.stat.DataError++
 		return
 	}

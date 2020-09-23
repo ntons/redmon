@@ -65,8 +65,6 @@ github.com/markbates/safe v1.0.1/go.mod h1:nAqgmRi7cY2nqMc92/bSEeQA+R4OheNU2T1kN
 github.com/montanaflynn/stats v0.0.0-20171201202039-1bf9dbcd8cbe/go.mod h1:wL8QJuTMNUDYhXwkmfOly8iTdp5TEcJFWZD2D7SIkUc=
 github.com/ntons/log-go v0.0.0-20200513065527-115b2b877ce4 h1:iyIGzDLCxPz7pQ40jDz1z0EPHkU8z1PNfUpcsRQoWHY=
 github.com/ntons/log-go v0.0.0-20200513065527-115b2b877ce4/go.mod h1:R+uLqm/b64q8B6ktCcR+SeCIJRz3WXjVCnhxmWeFDzc=
-github.com/ntons/tongo v0.0.0-20200426044323-4b75a2eed06c h1:w+1obyfAlLBOX6dS3jCws6ggmZCrymwCodARUiBdQaw=
-github.com/ntons/tongo v0.0.0-20200426044323-4b75a2eed06c/go.mod h1:+J7uny5kNE5nuKmByPhGZ51hA6o1i1pDBDGUr4u5UHc=
 github.com/onsi/ginkgo v1.6.0/go.mod h1:lLunBs/Ym6LB5Z9jYTR76FiuTmxDTDusOGeTQH+WWjE=
 github.com/onsi/ginkgo v1.10.1 h1:q/mM8GF/n0shIN8SaAZ0V+jnLPzen6WIVZdiwrRlMlo=
 github.com/onsi/ginkgo v1.10.1/go.mod h1:lLunBs/Ym6LB5Z9jYTR76FiuTmxDTDusOGeTQH+WWjE=
