@@ -11,7 +11,7 @@ import (
 
 // redis client interface
 // maybe *redis.Client, *redis.ClusterClient etc.
-type redisClient interface {
+type RedisClient interface {
 	Eval(ctx context.Context, script string, keys []string, args ...interface{}) *redis.Cmd
 	EvalSha(ctx context.Context, sha1 string, keys []string, args ...interface{}) *redis.Cmd
 	ScriptExists(ctx context.Context, hashes ...string) *redis.BoolSliceCmd
@@ -28,12 +28,12 @@ type Database = ReMon
 
 type ReMon struct {
 	o *options
-	r redisClient
+	r RedisClient
 	m *mongo.Client
 	s Stat
 }
 
-func New(r redisClient, m *mongo.Client, opts ...Option) (x *ReMon) {
+func New(r RedisClient, m *mongo.Client, opts ...Option) (x *ReMon) {
 	o := newOptions()
 	for _, opt := range opts {
 		opt.apply(o)

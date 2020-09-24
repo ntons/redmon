@@ -15,7 +15,7 @@ import (
 
 type Sync struct {
 	o *options
-	r redisClient
+	r RedisClient
 	m *mongo.Client
 	// life-time control
 	ctx    context.Context
@@ -25,7 +25,7 @@ type Sync struct {
 	cond    *sync.Cond
 }
 
-func NewSync(r redisClient, m *mongo.Client, opts ...Option) *Sync {
+func NewSync(r RedisClient, m *mongo.Client, opts ...Option) *Sync {
 	o := newOptions()
 	for _, opt := range opts {
 		opt.apply(o)

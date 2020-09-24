@@ -16,7 +16,7 @@ var scripts []*Script
 
 // load all scripts to redis
 // NewScript must be invoked before LoadScripts
-func LoadScripts(ctx context.Context, c redisClient) (err error) {
+func LoadScripts(ctx context.Context, c RedisClient) (err error) {
 	for _, s := range scripts {
 		if _, err = s.Load(ctx, c).Result(); err != nil {
 			return
@@ -69,23 +69,23 @@ func (s *Script) Hash() string {
 	return s.hash
 }
 
-func (s *Script) Load(ctx context.Context, c redisClient) *redis.StringCmd {
+func (s *Script) Load(ctx context.Context, c RedisClient) *redis.StringCmd {
 	return c.ScriptLoad(ctx, s.src)
 }
 
-func (s *Script) Exists(ctx context.Context, c redisClient) *redis.BoolSliceCmd {
+func (s *Script) Exists(ctx context.Context, c RedisClient) *redis.BoolSliceCmd {
 	return c.ScriptExists(ctx, s.hash)
 }
 
-func (s *Script) Eval(ctx context.Context, c redisClient, keys []string, args ...interface{}) *redis.Cmd {
+func (s *Script) Eval(ctx context.Context, c RedisClient, keys []string, args ...interface{}) *redis.Cmd {
 	return c.Eval(ctx, s.src, keys, args...)
 }
 
-func (s *Script) EvalSha(ctx context.Context, c redisClient, keys []string, args ...interface{}) *redis.Cmd {
+func (s *Script) EvalSha(ctx context.Context, c RedisClient, keys []string, args ...interface{}) *redis.Cmd {
 	return c.EvalSha(ctx, s.hash, keys, args...)
 }
 
-func (s *Script) Run(ctx context.Context, c redisClient, keys []string, args ...interface{}) *redis.Cmd {
+func (s *Script) Run(ctx context.Context, c RedisClient, keys []string, args ...interface{}) *redis.Cmd {
 	if !s.loaded {
 		s.loaded = s.trySha()
 	}
