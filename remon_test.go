@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/go-redis/redis/v7"
+	"github.com/go-redis/redis/v8"
 	"github.com/vmihailenco/msgpack/v4"
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/mongo"
@@ -40,13 +40,13 @@ func TestGet(t *testing.T) {
 
 	var key, val = fmt.Sprintf("%d", rand.Int()), "hello"
 
-	r.Del(key)
+	r.Del(ctx, key)
 	if _, err := rm.get(ctx, key); !isCacheMiss(err) {
 		t.Fatalf("unexpected get err: %v", err)
 	}
 
 	b, _ := msgpack.Marshal(&data{Rev: 1, Val: val})
-	r.Set(key, b2s(b), 0)
+	r.Set(ctx, key, b2s(b), 0)
 	if d, err := rm.get(ctx, key); isCacheMiss(err) {
 		t.Fatalf("unexpected get err: %v", err)
 	} else if d.Rev != 1 {
@@ -65,18 +65,18 @@ func TestUpdate(t *testing.T) {
 
 	var key, val = fmt.Sprintf("%d", rand.Int()), "hello"
 
-	r.Del(key)
+	r.Del(ctx, key)
 	if err := rm.update(ctx, key, val); !isCacheMiss(err) {
 		t.Fatalf("unexpected update err: %v", err)
 	}
 
 	var d = data{Rev: 0}
 	b, _ := msgpack.Marshal(&d)
-	r.Set(key, b2s(b), 0)
+	r.Set(ctx, key, b2s(b), 0)
 	if err := rm.update(ctx, key, val); err != nil {
 		t.Fatalf("unexpected update err: %v", err)
 	}
-	b, _ = r.Get(key).Bytes()
+	b, _ = r.Get(ctx, key).Bytes()
 	msgpack.Unmarshal(b, &d)
 	if d.Rev != 1 {
 		t.Fatalf("unexpected update rev: %v", d.Rev)
@@ -88,7 +88,7 @@ func TestUpdate(t *testing.T) {
 	if err := rm.update(ctx, key, val); err != nil {
 		t.Fatalf("unexpected update err: %v", err)
 	}
-	b, _ = r.Get(key).Bytes()
+	b, _ = r.Get(ctx, key).Bytes()
 	msgpack.Unmarshal(b, &d)
 	if d.Rev != 2 {
 		t.Fatalf("unexpected update rev: %v", d.Rev)
@@ -113,7 +113,7 @@ func TestLoad(t *testing.T) {
 		val        = "hello"
 	)
 
-	r.Del(key)
+	r.Del(ctx, key)
 	m.Database(database).Collection(collection).DeleteOne(
 		ctx, bson.M{"_id": _id})
 	if d, err := rm.load(ctx, key); err != nil {
@@ -122,7 +122,7 @@ func TestLoad(t *testing.T) {
 		t.Fatalf("unexpected load rev: %v", d.Rev)
 	}
 
-	r.Del(key)
+	r.Del(ctx, key)
 	m.Database(database).Collection(collection).InsertOne(
 		ctx, bson.M{"_id": _id, "rev": 1, "val": val})
 
@@ -133,5 +133,4 @@ func TestLoad(t *testing.T) {
 	} else if d.Val != val {
 		t.Fatalf("unexpected load val: %v", d.Val)
 	}
-
 }

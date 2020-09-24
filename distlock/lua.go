@@ -1,5 +1,6 @@
 package redislock
 
+/*
 import (
 	"errors"
 	"fmt"
@@ -74,3 +75,4 @@ func ScriptLoad(r RedisClient) (err error) {
 	}
 	return
 }
+*/

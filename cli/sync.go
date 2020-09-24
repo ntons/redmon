@@ -9,7 +9,7 @@ import (
 )
 
 func Sync(ctx context.Context) {
-	r, m, err := Dial()
+	r, m, err := Dial(ctx)
 	if err != nil {
 		log.Fatalf("failed to dail: %v", err)
 	}

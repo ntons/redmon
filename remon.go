@@ -3,7 +3,7 @@ package remon
 import (
 	"context"
 
-	"github.com/go-redis/redis/v7"
+	"github.com/go-redis/redis/v8"
 	"github.com/vmihailenco/msgpack/v4"
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/mongo"
@@ -12,11 +12,11 @@ import (
 // redis client interface
 // maybe *redis.Client, *redis.ClusterClient etc.
 type redisClient interface {
-	Eval(script string, keys []string, args ...interface{}) *redis.Cmd
-	EvalSha(sha1 string, keys []string, args ...interface{}) *redis.Cmd
-	ScriptExists(hashes ...string) *redis.BoolSliceCmd
-	ScriptLoad(script string) *redis.StringCmd
-	ProcessContext(context.Context, redis.Cmder) error
+	Eval(ctx context.Context, script string, keys []string, args ...interface{}) *redis.Cmd
+	EvalSha(ctx context.Context, sha1 string, keys []string, args ...interface{}) *redis.Cmd
+	ScriptExists(ctx context.Context, hashes ...string) *redis.BoolSliceCmd
+	ScriptLoad(ctx context.Context, script string) *redis.StringCmd
+	Get(ctx context.Context, key string) *redis.StringCmd
 }
 
 type data struct {
@@ -68,8 +68,8 @@ func (x *ReMon) Set(ctx context.Context, key, val string) (err error) {
 
 // get data from cache
 func (x *ReMon) get(ctx context.Context, key string) (dat data, err error) {
-	cmd := redis.NewStringCmd("get", key)
-	if err = x.r.ProcessContext(ctx, cmd); err != nil {
+	b, err := x.r.Get(ctx, key).Bytes()
+	if err != nil {
 		if err == redis.Nil {
 			err = errCacheMiss
 		}
@@ -81,10 +81,9 @@ func (x *ReMon) get(ctx context.Context, key string) (dat data, err error) {
 			x.s.redisError++
 		}
 		return
-	} else {
-		x.s.cacheHit++
 	}
-	if err = msgpack.Unmarshal(s2b(cmd.Val()), &dat); err != nil {
+	x.s.cacheHit++
+	if err = msgpack.Unmarshal(b, &dat); err != nil {
 		x.o.log.Errorf("failed to unmarshal data: %v", err)
 		x.s.dataError++
 		return
@@ -93,8 +92,10 @@ func (x *ReMon) get(ctx context.Context, key string) (dat data, err error) {
 }
 
 // run script
-func (x *ReMon) runScript(ctx context.Context, script *Script, key string, args ...interface{}) (cmd *redis.Cmd) {
-	cmd = script.RunContext(ctx, x.r, []string{key}, args...)
+func (x *ReMon) runScript(
+	ctx context.Context, script *Script, key string, args ...interface{}) (
+	cmd *redis.Cmd) {
+	cmd = script.Run(ctx, x.r, []string{key}, args...)
 	if err := cmd.Err(); err != nil {
 		if err == redis.Nil {
 			cmd.SetErr(nil) // not regard redis.Nil as error
@@ -108,9 +109,9 @@ func (x *ReMon) runScript(ctx context.Context, script *Script, key string, args 
 		} else {
 			x.s.redisError++
 		}
-	} else {
-		x.s.cacheHit++
+		return
 	}
+	x.s.cacheHit++
 	return
 }
 

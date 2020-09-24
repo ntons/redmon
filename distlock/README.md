@@ -1,2 +1,4 @@
 # distlock-go
-redis based distributed lock
+
+Transferable distributed lock based on [redsync](https://github.com/go-redsync/redsync)
+

@@ -6,7 +6,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/go-redis/redis/v7"
+	"github.com/go-redis/redis/v8"
 	"github.com/vmihailenco/msgpack/v4"
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/mongo"
@@ -107,7 +107,7 @@ func (x *Sync) next(key string, rev int64) (_ string, _ data, err error) {
 func (x *Sync) runScript(
 	script *Script, keys []string, args ...interface{}) (
 	_ string, dat data, err error) {
-	v, err := script.RunContext(x.ctx, x.r, keys, args...).Result()
+	v, err := script.Run(x.ctx, x.r, keys, args...).Result()
 	if err == redis.Nil {
 		// nothing to peek
 		return

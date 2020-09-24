@@ -8,9 +8,8 @@ import (
 	"os/signal"
 	"sync"
 	"syscall"
-	"time"
 
-	"github.com/go-redis/redis/v7"
+	"github.com/go-redis/redis/v8"
 	log "github.com/ntons/log-go"
 	"go.mongodb.org/mongo-driver/mongo"
 	options "go.mongodb.org/mongo-driver/mongo/options"
@@ -40,14 +39,17 @@ func (r *RedisURLs) Set(url string) (err error) {
 	return
 }
 
-func Dial() (r *redis.Client, m *mongo.Client, err error) {
-	r = redis.NewClient(&redis.Options{Addr: cfg.Redis})
+func Dial(ctx context.Context) (r *redis.Client, m *mongo.Client, err error) {
+	ro, err := redis.ParseURL(cfg.Redis)
+	if err != nil {
+		return
+	}
+	r = redis.NewClient(ro)
+
 	if m, err = mongo.NewClient(
 		options.Client().ApplyURI(cfg.Mongo)); err != nil {
 		return
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-	defer cancel()
 	if err = m.Connect(ctx); err != nil {
 		return
 	}

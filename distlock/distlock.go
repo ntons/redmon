@@ -1,5 +1,6 @@
 package redislock
 
+/*
 import (
 	"context"
 	"fmt"
@@ -141,3 +142,4 @@ func Refresh(r RedisClient, key, token string, expire time.Time) (err error) {
 	}
 	return luaRetToErr(v)
 }
+*/

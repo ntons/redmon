@@ -1,11 +1,13 @@
 package remon
 
 import (
+	"context"
 	"fmt"
 	"math/rand"
 	"testing"
+	"time"
 
-	"github.com/go-redis/redis/v7"
+	"github.com/go-redis/redis/v8"
 	"github.com/vmihailenco/msgpack/v4"
 )
 
@@ -13,17 +15,20 @@ func TestPeekNext(t *testing.T) {
 	r, m := dial(t)
 	s := NewSync(r, m)
 
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+
 	var key, val = fmt.Sprintf("%d", rand.Int()), "hello"
-	r.Del(":DIRTYQUE", ":DIRTYSET", key)
+	r.Del(ctx, ":DIRTYQUE", ":DIRTYSET", key)
 
 	if _, _, err := s.peek(); err != redis.Nil {
 		t.Fatalf("unexpected peek error: %v", err)
 	}
 
 	b, _ := msgpack.Marshal(&data{Rev: 1, Val: val})
-	r.Set(key, b2s(b), 0)
-	r.SAdd(":DIRTYSET", key)
-	r.LPush(":DIRTYQUE", key)
+	r.Set(ctx, key, b2s(b), 0)
+	r.SAdd(ctx, ":DIRTYSET", key)
+	r.LPush(ctx, ":DIRTYQUE", key)
 
 	if k, d, err := s.peek(); err != nil {
 		t.Fatalf("unexpected peek error: %v", err)
