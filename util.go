@@ -2,6 +2,7 @@ package remon
 
 import (
 	"reflect"
+	"time"
 	"unsafe"
 )
 
@@ -14,4 +15,12 @@ func s2b(s string) (b []byte) {
 	bh := (*reflect.SliceHeader)(unsafe.Pointer(&b))
 	bh.Data, bh.Len, bh.Cap = sh.Data, sh.Len, sh.Len
 	return
+}
+
+func minIntToDuration(a, b int) time.Duration {
+	if a < b {
+		return time.Duration(a)
+	} else {
+		return time.Duration(b)
+	}
 }

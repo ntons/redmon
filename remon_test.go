@@ -3,25 +3,21 @@ package remon
 import (
 	"context"
 	"fmt"
+	"math/rand"
 	"testing"
 	"time"
 
 	"github.com/go-redis/redis/v7"
+	"github.com/vmihailenco/msgpack/v4"
+	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/mongo"
 	mongooptions "go.mongodb.org/mongo-driver/mongo/options"
 )
 
-func Dial(t *testing.T) *ReMon {
+func dial(t *testing.T) (*redis.Client, *mongo.Client) {
 	r := redis.NewClient(&redis.Options{
 		Addr: "127.0.0.1:6379",
 	})
-	/*
-		if _, err := r.Ping().Result(); err != nil {
-			fmt.Printf("Error: %T", err)
-			t.Fatal("failed to ping redis:", err)
-		}
-	*/
-
 	m, err := mongo.NewClient(
 		mongooptions.Client().ApplyURI("mongodb://127.0.0.1"))
 	if err != nil {
@@ -32,95 +28,110 @@ func Dial(t *testing.T) *ReMon {
 	if err := m.Connect(ctx); err != nil {
 		t.Fatal("failed to connect mongo server:", err)
 	}
-	/*
-		if err := ScriptLoad(r); err != nil {
-			t.Fatal("failed to script load:", err)
-		}
-	*/
-
-	return New(r, m)
+	return r, m
 }
 
-func TestReMon(t *testing.T) {
-	x := Dial(t)
+func TestGet(t *testing.T) {
+	r, m := dial(t)
+	rm := New(r, m)
 
-	func() {
-		fmt.Println("Set")
-		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-		defer cancel()
-		fmt.Println(x.Set(ctx, "aa:bb:cc", "world"))
-		fmt.Println(x.getDataFromRedis(ctx, "aa:bb:cc"))
-	}()
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
 
-	func() {
-		fmt.Println("Get")
-		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-		defer cancel()
-		fmt.Println(x.Get(ctx, "aa:bb:cc"))
-		fmt.Println(x.getDataFromRedis(ctx, "aa:bb:cc"))
-	}()
+	var key, val = fmt.Sprintf("%d", rand.Int()), "hello"
 
+	r.Del(key)
+	if _, err := rm.get(ctx, key); !isCacheMiss(err) {
+		t.Fatalf("unexpected get err: %v", err)
+	}
+
+	b, _ := msgpack.Marshal(&data{Rev: 1, Val: val})
+	r.Set(key, b2s(b), 0)
+	if d, err := rm.get(ctx, key); isCacheMiss(err) {
+		t.Fatalf("unexpected get err: %v", err)
+	} else if d.Rev != 1 {
+		t.Fatalf("unexpected get rev: %v", d.Rev)
+	} else if d.Val != val {
+		t.Fatalf("unexpected get val: %v", d.Val)
+	}
 }
 
-func TestList(t *testing.T) {
-	x := Dial(t)
+func TestUpdate(t *testing.T) {
+	r, m := dial(t)
+	rm := New(r, m)
 
-	func() {
-		fmt.Println("PushToList")
-		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-		defer cancel()
-		fmt.Println(x.Push(ctx, "aa:bb:cc", []string{"this is a elem"}))
-		fmt.Println(x.getDataFromRedis(ctx, "aa:bb:cc"))
-	}()
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
 
-	func() {
-		fmt.Println("PullFromList:")
-		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-		defer cancel()
-		list, err := x.GetList(ctx, "aa:bb:cc")
-		fmt.Println(err)
-		fmt.Println(x.Pull(ctx, "aa:bb:cc", []string{list[0].Id, list[len(list)-1].Id}))
-		fmt.Println(x.getDataFromRedis(ctx, "aa:bb:cc"))
-	}()
+	var key, val = fmt.Sprintf("%d", rand.Int()), "hello"
+
+	r.Del(key)
+	if err := rm.update(ctx, key, val); !isCacheMiss(err) {
+		t.Fatalf("unexpected update err: %v", err)
+	}
+
+	var d = data{Rev: 0}
+	b, _ := msgpack.Marshal(&d)
+	r.Set(key, b2s(b), 0)
+	if err := rm.update(ctx, key, val); err != nil {
+		t.Fatalf("unexpected update err: %v", err)
+	}
+	b, _ = r.Get(key).Bytes()
+	msgpack.Unmarshal(b, &d)
+	if d.Rev != 1 {
+		t.Fatalf("unexpected update rev: %v", d.Rev)
+	}
+	if d.Val != val {
+		t.Fatalf("unexpected update val: %v", d.Val)
+	}
+
+	if err := rm.update(ctx, key, val); err != nil {
+		t.Fatalf("unexpected update err: %v", err)
+	}
+	b, _ = r.Get(key).Bytes()
+	msgpack.Unmarshal(b, &d)
+	if d.Rev != 2 {
+		t.Fatalf("unexpected update rev: %v", d.Rev)
+	}
+	if d.Val != val {
+		t.Fatalf("unexpected update val: %v", d.Val)
+	}
 }
 
-func TestEvalVar(t *testing.T) {
-	x := Dial(t)
+func TestLoad(t *testing.T) {
+	r, m := dial(t)
+	rm := New(r, m)
 
-	func() {
-		fmt.Println("EvalVar")
-		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-		defer cancel()
-		fmt.Println(x.EvalVarJSON(ctx, "aa:bb:dd", "something=1024"))
-		fmt.Println(x.getDataFromRedis(ctx, "aa:bb:dd"))
-	}()
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
 
-	func() {
-		fmt.Println("EvalVar")
-		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-		defer cancel()
-		fmt.Println(x.EvalVarJSON(ctx, "aa:bb:dd", "something=10; return -1"))
-		fmt.Println(x.getDataFromRedis(ctx, "aa:bb:dd"))
-	}()
+	var (
+		database   = "test"
+		collection = "remon"
+		_id        = fmt.Sprintf("%d", rand.Int())
+		key        = fmt.Sprintf("%s:%s:%s", database, collection, _id)
+		val        = "hello"
+	)
 
-	func() {
-		fmt.Println("EvalVar")
-		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-		defer cancel()
-		fmt.Println(x.EvalVarJSON(ctx, "aa:bb:dd", "something=100"))
-		fmt.Println(x.getDataFromRedis(ctx, "aa:bb:dd"))
-	}()
+	r.Del(key)
+	m.Database(database).Collection(collection).DeleteOne(
+		ctx, bson.M{"_id": _id})
+	if d, err := rm.load(ctx, key); err != nil {
+		t.Fatalf("unexpected load err: %v", err)
+	} else if d.Rev != 0 {
+		t.Fatalf("unexpected load rev: %v", d.Rev)
+	}
 
-	func() {
-		fmt.Println("EvalVar")
-		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-		defer cancel()
-		fmt.Println(x.EvalVarJSON(ctx, "aa:bb:dd", "while true do end"))
-	}()
-	func() {
-		fmt.Println("EvalVar")
-		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-		defer cancel()
-		fmt.Println(x.getDataFromRedis(ctx, "aa:bb:dd"))
-	}()
+	r.Del(key)
+	m.Database(database).Collection(collection).InsertOne(
+		ctx, bson.M{"_id": _id, "rev": 1, "val": val})
+
+	if d, err := rm.load(ctx, key); err != nil {
+		t.Fatalf("unexpected load err: %v", err)
+	} else if d.Rev != 1 {
+		t.Fatalf("unexpected load rev: %v", d.Rev)
+	} else if d.Val != val {
+		t.Fatalf("unexpected load val: %v", d.Val)
+	}
+
 }

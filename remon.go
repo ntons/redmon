@@ -2,11 +2,6 @@ package remon
 
 import (
 	"context"
-	"encoding/json"
-	"errors"
-	"fmt"
-	"strings"
-	"time"
 
 	"github.com/go-redis/redis/v7"
 	"github.com/vmihailenco/msgpack/v4"
@@ -14,67 +9,31 @@ import (
 	"go.mongodb.org/mongo-driver/mongo"
 )
 
-type RedisClient interface {
-	scripter
-	Pipeline() redis.Pipeliner
+// redis client interface
+// maybe *redis.Client, *redis.ClusterClient etc.
+type redisClient interface {
+	Eval(script string, keys []string, args ...interface{}) *redis.Cmd
+	EvalSha(sha1 string, keys []string, args ...interface{}) *redis.Cmd
+	ScriptExists(hashes ...string) *redis.BoolSliceCmd
+	ScriptLoad(script string) *redis.StringCmd
 	ProcessContext(context.Context, redis.Cmder) error
 }
 
-var (
-	// exported errors
-	ErrNotExist = errors.New("remon: not exist")
-)
-
-func isBusyError(err error) bool {
-	return err != nil && strings.HasPrefix(err.Error(), "BUSY")
+type data struct {
+	Rev int64  `msgpack:"rev" bson:"rev" json:"rev"`
+	Val string `msgpack:"val" bson:"val" json:"val"`
 }
 
-// list element
-type Elem struct {
-	Id    string
-	Value string
-}
-
-type Data struct {
-	// sync/load
-	Version int64 `msgpack:"version" bson:"version"`
-	// for get/set
-	Value string `msgpack:"value" bson:"value"`
-	// for list
-	List struct {
-		Inc int64             `msgpack:"inc" bson:"inc"` // id auto increment
-		Que []string          `msgpack:"que" bson:"que"` // ids by push order
-		Map map[string]string `msgpack:"map" bson:"map"` // id to value
-	} `msgpack:"list" bson:"list"`
-}
-
-func (d Data) String() string {
-	b, _ := json.Marshal(&d)
-	return string(b)
-}
-
-func (d *Data) getList() (list []Elem) {
-	list = make([]Elem, 0, len(d.List.Que))
-	for _, id := range d.List.Que {
-		list = append(list, Elem{Id: id, Value: d.List.Map[id]})
-	}
-	return
-}
-
-type DB = ReMon
+type Database = ReMon
 
 type ReMon struct {
-	// options
 	o *options
-	// redis client
-	r RedisClient
-	// mongo client
+	r redisClient
 	m *mongo.Client
-	// stat
-	stat Stat
+	s Stat
 }
 
-func New(r RedisClient, m *mongo.Client, opts ...Option) (x *ReMon) {
+func New(r redisClient, m *mongo.Client, opts ...Option) (x *ReMon) {
 	o := newOptions()
 	for _, opt := range opts {
 		opt.apply(o)
@@ -82,302 +41,151 @@ func New(r RedisClient, m *mongo.Client, opts ...Option) (x *ReMon) {
 	return &ReMon{o: o, r: r, m: m}
 }
 
-func (x *ReMon) Stat() *Stat { return &x.stat }
+func (x *ReMon) Stat() *Stat { return &x.s }
 
-// Get value from remon, if redis cache miss, load from mongo
-func (x *ReMon) Get(ctx context.Context, key string) (value string, err error) {
-	if value, err = x.getValueFromRedis(ctx, key); err != nil {
-		if err != redis.Nil {
-			return
-		}
-		var data Data
-		if data, err = x.loadDataFromMongoToRedis(ctx, key); err != nil {
-			return
-		}
-		value = data.Value
+// Get value from remon, if cache miss, load from database
+func (x *ReMon) Get(ctx context.Context, key string) (val string, err error) {
+	dat, err := x.get(ctx, key)
+	if isCacheMiss(err) {
+		dat, err = x.load(ctx, key)
 	}
-	return
+	if err == nil && dat.Rev < 1 {
+		return "", ErrNotFound
+	}
+	return dat.Val, nil
 }
 
 // Set value to redis cache, data will be saved to mongo by sync
-func (x *ReMon) Set(ctx context.Context, key, value string) (err error) {
-	if err = x.setValueToRedis(ctx, key, value); err != nil {
-		if err != redis.Nil {
+func (x *ReMon) Set(ctx context.Context, key, val string) (err error) {
+	if err = x.update(ctx, key, val); isCacheMiss(err) {
+		if _, err = x.load(ctx, key); err != nil {
 			return
 		}
-		if _, err = x.loadDataFromMongoToRedis(ctx, key); err != nil {
-			if err != ErrNotExist {
-				return
-			}
-		}
-		if err = x.setValueToRedis(ctx, key, value); err != nil {
-			return
-		}
+		err = x.update(ctx, key, val)
 	}
 	return
 }
 
-// Get list value from remon, if redis cache miss, load from mongodb
-func (x *ReMon) GetList(ctx context.Context, key string) (list []Elem, err error) {
-	if list, err = x.getListFromRedis(ctx, key); err != nil {
-		if err != redis.Nil {
-			return
-		}
-		var data Data
-		if data, err = x.loadDataFromMongoToRedis(ctx, key); err != nil {
-			return
-		}
-		list = data.getList()
-	}
-	return
-}
-
-// Push element(s) to list
-func (x *ReMon) Push(ctx context.Context, key string, values []string, opts ...PushOption) (err error) {
-	var o = &pushOptions{}
-	for _, opt := range opts {
-		opt.apply(o)
-	}
-	if err = x.pushToRedis(ctx, key, values, o); err != nil {
-		if err != redis.Nil {
-			return
-		}
-		if _, err = x.loadDataFromMongoToRedis(ctx, key); err != nil {
-			if err != ErrNotExist {
-				return
-			}
-			if !o.addOnNotExist {
-				return
-			}
-		}
-		if err = x.pushToRedis(ctx, key, values, o); err != nil {
-			return
-		}
-	}
-	return
-}
-
-// Pull element(s) from list
-func (x *ReMon) Pull(ctx context.Context, key string, ids []string) (n int, err error) {
-	if n, err = x.pullFromRedis(ctx, key, ids); err != nil {
-		if err != redis.Nil {
-			return
-		}
-		if _, err = x.loadDataFromMongoToRedis(ctx, key); err != nil {
-			return
-		}
-		if n, err = x.pullFromRedis(ctx, key, ids); err != nil {
-			return
-		}
-	}
-	return
-}
-
-// Eval custom lua script on json value
-// If src cannot be trusted, set lua-time-limit to a small value
-func (x *ReMon) EvalVarJSON(ctx context.Context, key, src string) (ret int, value string, err error) {
-	if ret, value, err = x.evalVarJSON(ctx, key, src); err != nil {
-		if err != redis.Nil {
-			return
-		}
-		if _, err = x.loadDataFromMongoToRedis(ctx, key); err != nil {
-			if err != ErrNotExist {
-				return
-			}
-		}
-		if ret, value, err = x.evalVarJSON(ctx, key, src); err != nil {
-			return
-		}
-	}
-	return
-}
-
-func (x *ReMon) getDataFromRedis(ctx context.Context, key string) (data Data, err error) {
+// get data from cache
+func (x *ReMon) get(ctx context.Context, key string) (dat data, err error) {
 	cmd := redis.NewStringCmd("get", key)
 	if err = x.r.ProcessContext(ctx, cmd); err != nil {
 		if err == redis.Nil {
-			x.stat.RedisMiss++
-		} else {
-			x.stat.RedisError++
+			err = errCacheMiss
 		}
+	}
+	if err != nil {
+		if isCacheMiss(err) {
+			x.s.cacheMiss++
+		} else {
+			x.s.redisError++
+		}
+		return
 	} else {
-		x.stat.RedisHit++
+		x.s.cacheHit++
 	}
-	for isBusyError(err) {
-		pipe := x.r.Pipeline()
-		pipe.ScriptKill()
-		cmd = pipe.Get(key)
-		pipe.ExecContext(ctx)
-		if err = cmd.Err(); err != nil {
-			if err == redis.Nil {
-				x.stat.RedisMiss++
-			} else {
-				x.stat.RedisError++
-			}
-		} else {
-			x.stat.RedisHit++
-		}
-	}
-	if err != nil {
-		return
-	}
-	if err = msgpack.Unmarshal(s2b(cmd.Val()), &data); err != nil {
+	if err = msgpack.Unmarshal(s2b(cmd.Val()), &dat); err != nil {
+		x.o.log.Errorf("failed to unmarshal data: %v", err)
+		x.s.dataError++
 		return
 	}
 	return
 }
 
-func (x *ReMon) getValueFromRedis(ctx context.Context, key string) (value string, err error) {
-	data, err := x.getDataFromRedis(ctx, key)
-	if err != nil {
-		return
-	}
-	if data.Version == 0 {
-		err = ErrNotExist
-		return
-	}
-	value = data.Value
-	return
-}
-
-func (x *ReMon) eval(ctx context.Context, lua *redis.Script, key string, args ...interface{}) (cmd *redis.Cmd) {
-	cmdArgs := make([]interface{}, 4, 4+len(args))
-	cmdArgs[0] = "evalsha"
-	cmdArgs[1] = lua.Hash()
-	cmdArgs[2] = 1
-	cmdArgs[3] = key
-	cmdArgs = append(cmdArgs, args...)
-	cmd = redis.NewCmd(cmdArgs...)
-
-	var err error
-	if err = x.r.ProcessContext(ctx, cmd); err != nil {
+// run script
+func (x *ReMon) runScript(ctx context.Context, script *Script, key string, args ...interface{}) (cmd *redis.Cmd) {
+	cmd = script.RunContext(ctx, x.r, []string{key}, args...)
+	if err := cmd.Err(); err != nil {
 		if err == redis.Nil {
-			x.stat.RedisMiss++
-		} else {
-			x.stat.RedisError++
-		}
-	} else {
-		x.stat.RedisHit++
-	}
-	for isBusyError(err) {
-		pipe := x.r.Pipeline()
-		pipe.ScriptKill()
-		cmd = pipe.EvalSha(lua.Hash(), []string{key}, args...)
-		pipe.ExecContext(ctx)
-		if err = cmd.Err(); err != nil {
-			if err == redis.Nil {
-				x.stat.RedisMiss++
-			} else {
-				x.stat.RedisError++
-			}
-		} else {
-			x.stat.RedisHit++
+			cmd.SetErr(nil) // not regard redis.Nil as error
+		} else if isCacheMiss(err) {
+			cmd.SetErr(errCacheMiss)
 		}
 	}
-	return
-}
-
-func (x *ReMon) addValueToRedis(
-	ctx context.Context, key, value string) (err error) {
-	return
-}
-
-func (x *ReMon) setValueToRedis(
-	ctx context.Context, key, value string) (err error) {
-	return x.eval(ctx, luaSetValue, key, value).Err()
-}
-
-func (x *ReMon) evalVarJSON(ctx context.Context, key, src string) (ret int, value string, err error) {
-	r, err := x.eval(ctx, luaEvalVarJSON, key, src).Result()
-	if err != nil {
-		return
-	}
-	v, ok := r.([]interface{})
-	if !ok {
-		err = fmt.Errorf("bad script return type: %T", r)
-		return
-	}
-	if i64, ok := v[0].(int64); !ok {
-		err = fmt.Errorf("bad script return type: %T", v[0])
-		return
+	if err := cmd.Err(); err != nil {
+		if isCacheMiss(err) {
+			x.s.cacheMiss++
+		} else {
+			x.s.redisError++
+		}
 	} else {
-		ret = int(i64)
-	}
-	if value, ok = v[1].(string); !ok {
-		err = fmt.Errorf("bad script return type: %T", v[1])
-		return
+		x.s.cacheHit++
 	}
 	return
 }
 
-// load data from mongo to redis, including not exist status
-func (x *ReMon) loadDataFromMongoToRedis(ctx context.Context, key string) (data Data, err error) {
+// load data from database to cache
+// if loaded revision was accepted return "OK", else return latest data
+var loadScript = NewScript(`local b=redis.call("GET", KEYS[1]);if b and cmsgpack.unpack(b).rev>cmsgpack.unpack(ARGV[1]).rev then return b end;return redis.call("SET",KEYS[1],ARGV[1],"EX",86400)`)
+
+func (x *ReMon) load(
+	ctx context.Context, key string) (dat data, err error) {
 	database, collection, _id := x.o.keyMappingStrategy.MapKey(key)
 	if err = x.m.Database(database).Collection(collection).FindOne(
-		ctx, bson.M{"_id": _id}).Decode(&data); err != nil {
+		ctx, bson.M{"_id": _id}).Decode(&dat); err != nil {
 		if err != mongo.ErrNoDocuments {
-			x.stat.MongoError++
+			x.o.log.Errorf("failed to load data from mongo: %v", err)
+			x.s.mongoError++
 			return
 		}
 		err = nil
 	}
-	if data.List.Que == nil {
-		data.List.Que = []string{}
-	}
-	if data.List.Map == nil {
-		// keeping at least one element in map
-		// since lua regards empty table as array
-		data.List.Map = map[string]string{"x": ""}
-	}
-	b, err := msgpack.Marshal(data)
-	if err != nil {
-		x.stat.DataError++
+	var b []byte
+	if b, err = msgpack.Marshal(&dat); err != nil {
+		x.o.log.Errorf("failed to marshal data: %v", err)
+		x.s.dataError++
 		return
 	}
-	s, err := x.eval(ctx, luaLoadData, key,
-		b2s(b), // ARGV[1]
-		int64(x.o.volatileTTL/time.Millisecond), // ARGV[2]
-	).Text()
-	if err != nil {
+	var s string
+	if s, err = x.runScript(ctx, loadScript, key, b2s(b)).Text(); err != nil {
 		return
 	}
-	if err = msgpack.Unmarshal(s2b(s), &data); err != nil {
-		x.stat.DataError++
-		return
-	}
-	if data.Version == 0 {
-		err = ErrNotExist
-		return
+	if s != "OK" {
+		if err = msgpack.Unmarshal(s2b(s), &dat); err != nil {
+			x.o.log.Errorf("failed to unmarshal data: %v", err)
+			x.s.dataError++
+			return
+		}
 	}
 	return
 }
 
-func (x *ReMon) getListFromRedis(ctx context.Context, key string) (list []Elem, err error) {
-	data, err := x.getDataFromRedis(ctx, key)
-	if err != nil {
-		return
+// update value to cache, return revision after updating
+var updateScript = NewScript(`local b=redis.call("GET",KEYS[1]);if not b then error("CACHE_MISS") end;local d=cmsgpack.unpack(b);d.rev,d.val=d.rev+1,ARGV[1];local b=cmsgpack.pack(d);redis.call("SET",KEYS[1],b);if redis.call("SADD",":DIRTYSET",KEYS[1])>0 then redis.call("LPUSH",":DIRTYQUE",KEYS[1]) end;return d.rev`)
+
+func (x *ReMon) update(ctx context.Context, key, val string) error {
+	return x.runScript(ctx, updateScript, key, val).Err()
+}
+
+// [internal only] eval lua script on value
+// note that an endless-loop in script will halt redis
+// this method is too dangerous to export
+var evalScript = NewScript(`
+local b=redis.call("GET", KEYS[1])
+if not b then error("CACHE_MISS") end
+local d=cmsgpack.unpack(b)
+local e={cmsgpack=cmsgpack, cjson=cjson, rev=d.rev, val=d.val}
+local f=loadstring(ARGV[1])
+setfenv(f,e)
+local r=f()
+if d.val~=e.val then
+d.rev,d.val=d.rev+1,e.val
+local b=cmsgpack.pack(d)
+redis.call("SET",KEYS[1],b)
+if redis.call("SADD",":DIRTYSET",KEYS[1])>0 then redis.call("LPUSH",":DIRTYQUE",KEYS[1]) end
+end
+return r`)
+
+// Eval execute a script on value, modified value will be saved automatically
+// It's dangerous to eval untrusted script, so this method is only used to
+// extend remon abilities
+func (x *ReMon) eval(
+	ctx context.Context, key, src string) (cmd *redis.Cmd) {
+	if cmd = x.runScript(ctx, evalScript, key, src); isCacheMiss(cmd.Err()) {
+		if _, err := x.load(ctx, key); err != nil {
+			return
+		}
+		cmd = x.runScript(ctx, evalScript, key, src)
 	}
-	if data.Version == 0 {
-		err = ErrNotExist
-		return
-	}
-	list = data.getList()
 	return
-}
-
-func (x *ReMon) pushToRedis(ctx context.Context, key string, values []string, o *pushOptions) (err error) {
-	var args = make([]interface{}, 0, len(values)+1)
-	for _, value := range values {
-		args = append(args, value)
-	}
-	args = append(args, o.capacity)
-	return x.eval(ctx, luaPush, key, args...).Err()
-}
-
-func (x *ReMon) pullFromRedis(ctx context.Context, key string, ids []string) (n int, err error) {
-	args := make([]interface{}, len(ids))
-	for i, id := range ids {
-		args[i] = id
-	}
-	return x.eval(ctx, luaPull, key, args...).Int()
 }

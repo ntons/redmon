@@ -2,7 +2,8 @@ package remon
 
 import (
 	"strings"
-	"time"
+
+	log "github.com/ntons/log-go"
 )
 
 // map redis key to mongodb (database,collection,_id)
@@ -27,28 +28,27 @@ func (defaultKeyMappingStrategy) MapKey(key string) (_, _, _ string) {
 	case 3:
 		return a[0], a[1], a[2]
 	case 2:
-		return "default", a[0], a[1]
+		return "remon", a[0], a[1]
 	default:
-		return "default", "default", key
+		return "remon", "default", key
 	}
 }
 
 // ReMon/Sync options
 type options struct {
-	// volatile ttl could be a very long time while redis maxmemory-policy was set to volatile-lru or volatile-lfu
-	volatileTTL time.Duration
 	// map redis key to mongodb (database,collection,_id)
 	keyMappingStrategy KeyMappingStrategy
-
 	/// for sync only
 	// sync limit count per second, 0 means unlimited
-	syncLimit int32
+	rate int
+	// logger
+	log log.Recorder
 }
 
 func newOptions() *options {
 	return &options{
-		volatileTTL:        24 * time.Hour,
 		keyMappingStrategy: defaultKeyMappingStrategy{},
+		log:                log.Nop{},
 	}
 }
 
@@ -64,12 +64,6 @@ func (f funcOption) apply(o *options) {
 	f.f(o)
 }
 
-func WithVolatileTTL(v time.Duration) Option {
-	return funcOption{func(o *options) {
-		o.volatileTTL = v
-	}}
-}
-
 func WithKeyMappingStrategy(v KeyMappingStrategy) Option {
 	return funcOption{func(o *options) {
 		o.keyMappingStrategy = v
@@ -81,8 +75,12 @@ func WithKeyMappingStrategyFunc(v func(string) (_, _, _ string)) Option {
 	}}
 }
 
-func WithSyncLimit(v int) Option {
-	return funcOption{func(o *options) { o.syncLimit = int32(v) }}
+func WithSyncRate(rate int) Option {
+	return funcOption{func(o *options) { o.rate = rate }}
+}
+
+func WithLogger(logger log.Recorder) Option {
+	return funcOption{func(o *options) { o.log = logger }}
 }
 
 // push options
