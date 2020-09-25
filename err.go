@@ -10,8 +10,9 @@ const (
 )
 
 var (
-	ErrNotFound  = errors.New("not found")
-	errCacheMiss = errors.New("cache miss")
+	ErrAlreadyExists = errors.New("already exists")
+	ErrNotFound      = errors.New("not found")
+	errCacheMiss     = errors.New("cache miss")
 )
 
 func isCacheMiss(err error) bool {

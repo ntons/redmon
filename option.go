@@ -83,24 +83,23 @@ func WithLogger(logger log.Recorder) Option {
 	return funcOption{func(o *options) { o.log = logger }}
 }
 
-// push options
-type pushOptions struct {
-	capacity      int
-	addOnNotExist bool
+// add options
+type getOptions struct {
+	addIfNotFound *string
 }
 
-type PushOption interface {
-	apply(o *pushOptions)
+type GetOption interface {
+	apply(o *getOptions)
 }
 
-type funcPushOption struct {
-	f func(o *pushOptions)
+type funcGetOption struct {
+	f func(o *getOptions)
 }
 
-func (f funcPushOption) apply(o *pushOptions) {
+func (f funcGetOption) apply(o *getOptions) {
 	f.f(o)
 }
 
-func WithCapacity(capacity int) PushOption {
-	return funcPushOption{func(o *pushOptions) { o.capacity = capacity }}
+func AddIfNotFound(val string) GetOption {
+	return funcGetOption{func(o *getOptions) { o.addIfNotFound = &val }}
 }
