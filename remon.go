@@ -24,7 +24,7 @@ type data struct {
 	Val string `msgpack:"val" bson:"val" json:"val"`
 }
 
-type Database = ReMon
+type Client = ReMon
 
 type ReMon struct {
 	o *options
