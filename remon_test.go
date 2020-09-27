@@ -14,6 +14,10 @@ import (
 	mongooptions "go.mongodb.org/mongo-driver/mongo/options"
 )
 
+func init() {
+	rand.Seed(time.Now().UnixNano())
+}
+
 func rGetData(ctx context.Context, r *redis.Client, key string) (d data) {
 	b, _ := r.Get(ctx, key).Bytes()
 	msgpack.Unmarshal(b, &d)
@@ -50,18 +54,34 @@ func TestGet(t *testing.T) {
 
 	var key, val = fmt.Sprintf("%d", rand.Int()), "hello"
 
+	/*
+		r.Del(ctx, key)
+		if _, err := rm.get(ctx, key); !isCacheMiss(err) {
+			t.Fatalf("unexpected get err: %v", err)
+		}
+
+		rSetData(ctx, r, key, data{Rev: 0, Val: ""})
+		if _, err := rm.get(ctx, key); err != ErrNotFound {
+			t.Fatalf("unexpected get err: %v", err)
+		}
+
+		rSetData(ctx, r, key, data{Rev: 1, Val: val})
+		if _val, err := rm.get(ctx, key); err != nil {
+			t.Fatalf("unexpected get err: %v", err)
+		} else if _val != val {
+			t.Fatalf("unexpected get val: %v", _val)
+		}
+
+		rSetData(ctx, r, key, data{Rev: 0, Val: ""})
+		if _val, err := rm.get(ctx, key, AddIfNotFound(val)); err != nil {
+			t.Fatalf("unexpected get err: %v", err)
+		} else if _val != val {
+			t.Fatalf("unexpected get val: %v", _val)
+		}
+	*/
+
 	r.Del(ctx, key)
-	if _, err := rm.get(ctx, key); !isCacheMiss(err) {
-		t.Fatalf("unexpected get err: %v", err)
-	}
-
-	rSetData(ctx, r, key, data{Rev: 0, Val: ""})
-	if _, err := rm.get(ctx, key); err != ErrNotFound {
-		t.Fatalf("unexpected get err: %v", err)
-	}
-
-	rSetData(ctx, r, key, data{Rev: 1, Val: val})
-	if _val, err := rm.get(ctx, key); err != nil {
+	if _val, err := rm.Get(ctx, key, AddIfNotFound(val)); err != nil {
 		t.Fatalf("unexpected get err: %v", err)
 	} else if _val != val {
 		t.Fatalf("unexpected get val: %v", _val)
