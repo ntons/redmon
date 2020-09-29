@@ -1,4 +1,4 @@
-package remon
+package mailbox
 
 import (
 	"reflect"

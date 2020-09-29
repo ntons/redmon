@@ -74,14 +74,14 @@ func (x *Sync) Serve() {
 }
 
 // peek top dirty key and data
-var peekScript = NewScript(`local k=redis.call("LINDEX",":DIRTYQUE",-1);if not k then return end;local b = redis.call("GET",k);if not b then redis.call("RPOP",":DIRTYQUE");redis.call("SREM",":DIRTYSET",k);return end;return {k,b}`)
+var peekScript = newScript(`local k=redis.call("LINDEX",":DIRTYQUE",-1);if not k then return end;local b = redis.call("GET",k);if not b then redis.call("RPOP",":DIRTYQUE");redis.call("SREM",":DIRTYSET",k);return end;return {k,b}`)
 
 func (x *Sync) peek() (_ string, _ data, err error) {
 	return x.runScript(peekScript, []string{})
 }
 
 // clean dirty flag and make key volatile, then peek the next
-var nextScript = NewScript(`
+var nextScript = newScript(`
 if redis.call("LINDEX",":DIRTYQUE",-1)==KEYS[1] then
     local b=redis.call("GET",KEYS[1])
     if not b then

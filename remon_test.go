@@ -54,31 +54,29 @@ func TestGet(t *testing.T) {
 
 	var key, val = fmt.Sprintf("%d", rand.Int()), "hello"
 
-	/*
-		r.Del(ctx, key)
-		if _, err := rm.get(ctx, key); !isCacheMiss(err) {
-			t.Fatalf("unexpected get err: %v", err)
-		}
+	r.Del(ctx, key)
+	if _, err := rm.get(ctx, key); !isCacheMiss(err) {
+		t.Fatalf("unexpected get err: %v", err)
+	}
 
-		rSetData(ctx, r, key, data{Rev: 0, Val: ""})
-		if _, err := rm.get(ctx, key); err != ErrNotFound {
-			t.Fatalf("unexpected get err: %v", err)
-		}
+	rSetData(ctx, r, key, data{Rev: 0, Val: ""})
+	if _, err := rm.get(ctx, key); err != ErrNotFound {
+		t.Fatalf("unexpected get err: %v", err)
+	}
 
-		rSetData(ctx, r, key, data{Rev: 1, Val: val})
-		if _val, err := rm.get(ctx, key); err != nil {
-			t.Fatalf("unexpected get err: %v", err)
-		} else if _val != val {
-			t.Fatalf("unexpected get val: %v", _val)
-		}
+	rSetData(ctx, r, key, data{Rev: 1, Val: val})
+	if _val, err := rm.get(ctx, key); err != nil {
+		t.Fatalf("unexpected get err: %v", err)
+	} else if _val != val {
+		t.Fatalf("unexpected get val: %v", _val)
+	}
 
-		rSetData(ctx, r, key, data{Rev: 0, Val: ""})
-		if _val, err := rm.get(ctx, key, AddIfNotFound(val)); err != nil {
-			t.Fatalf("unexpected get err: %v", err)
-		} else if _val != val {
-			t.Fatalf("unexpected get val: %v", _val)
-		}
-	*/
+	rSetData(ctx, r, key, data{Rev: 0, Val: ""})
+	if _val, err := rm.get(ctx, key, AddIfNotFound(val)); err != nil {
+		t.Fatalf("unexpected get err: %v", err)
+	} else if _val != val {
+		t.Fatalf("unexpected get val: %v", _val)
+	}
 
 	r.Del(ctx, key)
 	if _val, err := rm.Get(ctx, key, AddIfNotFound(val)); err != nil {
@@ -191,5 +189,41 @@ func TestLoad(t *testing.T) {
 		t.Fatalf("unexpected load rev: %v", d.Rev)
 	} else if d.Val != val {
 		t.Fatalf("unexpected load val: %v", d.Val)
+	}
+}
+
+func TestEval(t *testing.T) {
+	r, m := dial(t)
+	rm := New(r, m)
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+
+	var key, val = fmt.Sprintf("%d", rand.Int()), "hello"
+	defer r.Del(ctx, key)
+
+	rSetData(ctx, r, key, data{Rev: 1, Val: val})
+	if s, err := rm.Eval(
+		ctx, NewEvalScript(`return VALUE`), key,
+	).Text(); err != nil {
+		t.Fatalf("unexpected eval error: %v", err)
+	} else if s != val {
+		t.Fatalf("unexpected eval value: %v", s)
+	} else if d := rGetData(ctx, r, key); d.Rev != 1 {
+		t.Fatalf("unexpected eval rev: %v", d.Rev)
+	} else if d.Val != val {
+		t.Fatalf("unexpected eval val: %v", d.Val)
+	}
+
+	if s, err := rm.Eval(
+		ctx, NewEvalScript(`VALUE="foo";return VALUE`), key,
+	).Text(); err != nil {
+		t.Fatalf("unexpected eval error: %v", err)
+	} else if s != "foo" {
+		t.Fatalf("unexpected eval value: %v", s)
+	} else if d := rGetData(ctx, r, key); d.Rev != 2 {
+		t.Fatalf("unexpected eval rev: %v", d.Rev)
+	} else if d.Val != "foo" {
+		t.Fatalf("unexpected eval val: %v", d.Val)
 	}
 }

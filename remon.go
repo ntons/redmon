@@ -2,6 +2,7 @@ package remon
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/go-redis/redis/v8"
 	"github.com/vmihailenco/msgpack/v4"
@@ -16,7 +17,6 @@ type RedisClient interface {
 	EvalSha(ctx context.Context, sha1 string, keys []string, args ...interface{}) *redis.Cmd
 	ScriptExists(ctx context.Context, hashes ...string) *redis.BoolSliceCmd
 	ScriptLoad(ctx context.Context, script string) *redis.StringCmd
-	Get(ctx context.Context, key string) *redis.StringCmd
 }
 
 type data struct {
@@ -54,6 +54,14 @@ func (x *ReMon) Get(
 	}
 	return
 }
+func (x *ReMon) GetBytes(
+	ctx context.Context, key string, opts ...GetOption) (_ []byte, err error) {
+	s, err := x.Get(ctx, key, opts...)
+	if err != nil {
+		return
+	}
+	return s2b(s), nil
+}
 
 // Set value to redis cache, data will be saved to mongo by sync
 func (x *ReMon) Set(ctx context.Context, key, val string) (err error) {
@@ -64,6 +72,10 @@ func (x *ReMon) Set(ctx context.Context, key, val string) (err error) {
 		err = x.set(ctx, key, val)
 	}
 	return
+}
+func (x *ReMon) SetBytes(
+	ctx context.Context, key string, val []byte) (err error) {
+	return x.Set(ctx, key, b2s(val))
 }
 
 // Set value to remon if key not exists
@@ -76,9 +88,13 @@ func (x *ReMon) Add(ctx context.Context, key, val string) (err error) {
 	}
 	return
 }
+func (x *ReMon) AddBytes(
+	ctx context.Context, key string, val []byte) (err error) {
+	return x.Add(ctx, key, b2s(val))
+}
 
 // get data from cache
-var luaGet = NewScript(`local b=redis.call("GET", KEYS[1]);if not b then error("CACHE_MISS") end;local d=cmsgpack.unpack(b);if d.rev==0 and ARGV[1] then d.rev,d.val=d.rev+1,ARGV[1];b=cmsgpack.pack(d);redis.call("SET",KEYS[1],b) if redis.call("SADD",":DIRTYSET",KEYS[1])>0 then redis.call("LPUSH",":DIRTYQUE",KEYS[1]) end end;return b
+var luaGet = newScript(`local b=redis.call("GET", KEYS[1]) if not b then error("CACHE_MISS") end local d=cmsgpack.unpack(b) if d.rev==0 and ARGV[1] then d.rev,d.val=d.rev+1,ARGV[1] b=cmsgpack.pack(d) redis.call("SET",KEYS[1],b) if redis.call("SADD",":DIRTYSET",KEYS[1])>0 then redis.call("LPUSH",":DIRTYQUE",KEYS[1]) end end return b
 `)
 
 func (x *ReMon) get(
@@ -108,13 +124,13 @@ func (x *ReMon) get(
 }
 
 // update value to cache, return revision after updating
-var luaSet = NewScript(`local b=redis.call("GET",KEYS[1]);if not b then error("CACHE_MISS") end;local d=cmsgpack.unpack(b);d.rev,d.val=d.rev+1,ARGV[1];b=cmsgpack.pack(d);redis.call("SET",KEYS[1],b);if redis.call("SADD",":DIRTYSET",KEYS[1])>0 then redis.call("LPUSH",":DIRTYQUE",KEYS[1]) end;return d.rev`)
+var luaSet = newScript(`local b=redis.call("GET",KEYS[1]) if not b then error("CACHE_MISS") end local d=cmsgpack.unpack(b) d.rev,d.val=d.rev+1,ARGV[1] redis.call("SET",KEYS[1],cmsgpack.pack(d)) if redis.call("SADD",":DIRTYSET",KEYS[1])>0 then redis.call("LPUSH",":DIRTYQUE",KEYS[1]) end return d.rev`)
 
 func (x *ReMon) set(ctx context.Context, key, val string) error {
 	return x.runScript(ctx, luaSet, key, val).Err()
 }
 
-var luaAdd = NewScript(`local b=redis.call("GET",KEYS[1]);if not b then error("CACHE_MISS") end;local d=cmsgpack.unpack(b);if d.rev~=0 then return 0 end;d.rev,d.val=d.rev+1,ARGV[1];b=cmsgpack.pack(d);redis.call("SET",KEYS[1],b);if redis.call("SADD",":DIRTYSET",KEYS[1])>0 then redis.call("LPUSH",":DIRTYQUE",KEYS[1]) end;return 1`)
+var luaAdd = newScript(`local b=redis.call("GET",KEYS[1]) if not b then error("CACHE_MISS") end local d=cmsgpack.unpack(b) if d.rev~=0 then return 0 end d.rev,d.val=d.rev+1,ARGV[1] redis.call("SET",KEYS[1],cmsgpack.pack(d)) if redis.call("SADD",":DIRTYSET",KEYS[1])>0 then redis.call("LPUSH",":DIRTYQUE",KEYS[1]) end return 1`)
 
 func (x *ReMon) add(ctx context.Context, key, val string) error {
 	if r, err := x.runScript(ctx, luaAdd, key, val).Int(); err != nil {
@@ -125,42 +141,30 @@ func (x *ReMon) add(ctx context.Context, key, val string) error {
 	return nil
 }
 
-// [internal only] eval lua script on value
-// note that an endless-loop in script will halt redis
-// this method is too dangerous to export
-var luaEval = NewScript(`
-local b=redis.call("GET", KEYS[1])
-if not b then error("CACHE_MISS") end
-local d=cmsgpack.unpack(b)
-local e={cmsgpack=cmsgpack, cjson=cjson, rev=d.rev, val=d.val}
-local f=loadstring(ARGV[1])
-setfenv(f,e)
-local r=f()
-if d.val~=e.val then
-d.rev,d.val=d.rev+1,e.val
-b=cmsgpack.pack(d)
-redis.call("SET",KEYS[1],b)
-if redis.call("SADD",":DIRTYSET",KEYS[1])>0 then redis.call("LPUSH",":DIRTYQUE",KEYS[1]) end
-end
-return r`)
+// eval lua script on VALUE
+func NewEvalScript(src string, opts ...ScriptOption) *Script {
+	tmpl := `local b=redis.call("GET", KEYS[1]) if not b then error("CACHE_MISS") end local d=cmsgpack.unpack(b) local f=assert(loadstring([[%s]])) local e={} setmetatable(e,{__index=_G}) e.VALUE=d.val setfenv(f,e) local r=f() if d.val~=e.VALUE then d.rev,d.val=d.rev+1,e.VALUE redis.call("SET",KEYS[1],cmsgpack.pack(d)) if redis.call("SADD",":DIRTYSET",KEYS[1])>0 then redis.call("LPUSH",":DIRTYQUE",KEYS[1]) end end return r`
+	return newScript(fmt.Sprintf(tmpl, src), opts...)
+}
 
 // Eval execute a script on value, modified value will be saved automatically
 // It's dangerous to eval untrusted script, so this method is only used to
 // extend remon abilities
-func (x *ReMon) eval(
-	ctx context.Context, key, src string) (cmd *redis.Cmd) {
-	if cmd = x.runScript(ctx, luaEval, key, src); isCacheMiss(cmd.Err()) {
+func (x *ReMon) Eval(
+	ctx context.Context, script *Script, key string, args ...interface{}) (
+	cmd *redis.Cmd) {
+	if cmd = x.runScript(ctx, script, key, args...); isCacheMiss(cmd.Err()) {
 		if err := x.load(ctx, key); err != nil {
 			return
 		}
-		cmd = x.runScript(ctx, luaEval, key, src)
+		cmd = x.runScript(ctx, script, key, args...)
 	}
 	return
 }
 
 // load data from database to cache
 // if loaded revision was accepted return "OK", else return latest data
-var luaLoad = NewScript(`local b=redis.call("GET",KEYS[1]);if not b or cmsgpack.unpack(b).rev<cmsgpack.unpack(ARGV[1]).rev then redis.call("SET",KEYS[1],ARGV[1],"EX",86400) end;return 0`)
+var luaLoad = newScript(`local b=redis.call("GET",KEYS[1]) if not b or cmsgpack.unpack(b).rev<cmsgpack.unpack(ARGV[1]).rev then redis.call("SET",KEYS[1],ARGV[1],"EX",86400) end return 0`)
 
 func (x *ReMon) load(ctx context.Context, key string) (err error) {
 	database, collection, _id := x.o.keyMappingStrategy.MapKey(key)

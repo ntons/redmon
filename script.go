@@ -49,7 +49,7 @@ type Script struct {
 	tryShaProb int  // trySha probability 1/n
 }
 
-func NewScript(src string, opts ...ScriptOption) *Script {
+func newScript(src string, opts ...ScriptOption) *Script {
 	h := sha1.New()
 	_, _ = io.WriteString(h, src)
 	s := &Script{
