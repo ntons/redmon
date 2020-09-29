@@ -30,8 +30,8 @@ type Client struct {
 	opts   []Option
 }
 
-func New(client *remon.Client, opts ...Option) Client {
-	return Client{client: client, opts: opts}
+func New(client *remon.Client, opts ...Option) *Client {
+	return &Client{client: client, opts: opts}
 }
 
 // list mails in box
