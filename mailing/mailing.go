@@ -66,10 +66,31 @@ func (c Client) Push(
 
 // pull mail(s) from box
 // ARGV must be sorted
-var luaPull = remon.NewEvalScript(`local d={seq=0,que={}} if #VALUE>0 then d=cmsgpack.unpack(VALUE) end local i,n=1,#d.que for _, id in ipairs(ARGV) do local j=#d.que while i<=j do local k=math.floor((i+j)/2) if d.que[k].id < id then i = k + 1 elseif d.que[k].id > id then j = k - 1 else table.remove(d.que, k) break end end end if #d.que ~= n then VALUE=cmsgpack.pack(d) end return n-#d.que`)
+var luaPull = remon.NewEvalScript(`
+local d={seq=0,que={}}
+if #VALUE>0 then d=cmsgpack.unpack(VALUE) end
+local i,n,r=1,#d.que,{}
+for _, id in ipairs(ARGV) do
+  local j=#d.que
+  while i<=j do
+    local k=math.floor((i+j)/2)
+	if d.que[k].id < id then
+	  i = k + 1
+	elseif d.que[k].id > id then
+	  j = k - 1
+	else
+	  r[#r+1]=d.que[k].id
+	  table.remove(d.que, k)
+	  break
+	end
+  end
+end
+if #d.que~=n then VALUE=cmsgpack.pack(d) end
+return r`)
 
 func (c Client) Pull(
-	ctx context.Context, key string, ids ...string) (err error) {
+	ctx context.Context, key string, ids ...string) (
+	pulled []string, err error) {
 	if len(ids) == 0 {
 		return
 	}
@@ -78,7 +99,14 @@ func (c Client) Pull(
 	for _, id := range ids {
 		args = append(args, id)
 	}
-	return c.client.Eval(ctx, luaPull, key, args...).Err()
+	r, err := c.client.Eval(ctx, luaPull, key, args...).Result()
+	if err != nil {
+		return
+	}
+	for _, v := range r.([]interface{}) {
+		pulled = append(pulled, v.(string))
+	}
+	return
 }
 
 var luaDrain = remon.NewEvalScript(`local d={seq=0,que={}} if #VALUE>0 then d=cmsgpack.unpack(VALUE) end if #d.que>0 then VALUE=cmsgpack.pack({seq=d.seq,que={}}) end return #d.que`)

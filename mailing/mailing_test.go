@@ -60,8 +60,10 @@ func TestMailing(t *testing.T) {
 		}
 	}
 
-	if err := cli.Pull(ctx, key, "00000001"); err != nil {
+	if pulled, err := cli.Pull(ctx, key, "00000001"); err != nil {
 		t.Fatalf("unexpected pull err: %v", err)
+	} else if len(pulled) != 1 || pulled[0] != "00000001" {
+		t.Fatalf("unexpected pull ret: %v", pulled)
 	} else if list, err := cli.List(ctx, key); err != nil {
 		t.Fatalf("unexpected list err: %v", err)
 	} else if len(list) != 9 {
@@ -74,8 +76,10 @@ func TestMailing(t *testing.T) {
 		}
 	}
 
-	if err := cli.Pull(ctx, key, "0000000A"); err != nil {
+	if pulled, err := cli.Pull(ctx, key, "0000000A"); err != nil {
 		t.Fatalf("unexpected pull err: %v", err)
+	} else if len(pulled) != 1 || pulled[0] != "0000000A" {
+		t.Fatalf("unexpected pull ret: %v", pulled)
 	} else if list, err := cli.List(ctx, key); err != nil {
 		t.Fatalf("unexpected list err: %v", err)
 	} else if len(list) != 8 {
@@ -88,20 +92,20 @@ func TestMailing(t *testing.T) {
 		}
 	}
 
-	if err := cli.Pull(ctx, key, "00000007"); err != nil {
+	if pulled, err := cli.Pull(
+		ctx, key, "00000005", "00000005", "00000007"); err != nil {
 		t.Fatalf("unexpected pull err: %v", err)
+	} else if len(pulled) != 2 || pulled[0] != "00000005" ||
+		pulled[1] != "00000007" {
+		t.Fatalf("unexpected pull ret: %v", pulled)
 	} else if list, err := cli.List(ctx, key); err != nil {
 		t.Fatalf("unexpected list err: %v", err)
-	} else if len(list) != 7 {
+	} else if len(list) != 6 {
 		t.Fatalf("unexpected list len: %v", len(list))
 	} else {
-		for i := 0; i < 5; i++ {
-			if list[i].Id != fmt.Sprintf("%08X", i+2) {
-				t.Fatalf("unexpected list elem: %v", list[i])
-			}
-		}
-		for i := 5; i < 7; i++ {
-			if list[i].Id != fmt.Sprintf("%08X", i+3) {
+		a := []int{2, 3, 4, 6, 8, 9}
+		for i := 0; i < 6; i++ {
+			if list[i].Id != fmt.Sprintf("%08X", a[i]) {
 				t.Fatalf("unexpected list elem: %v", list[i])
 			}
 		}
