@@ -1,4 +1,4 @@
-package mailbox
+package mailing
 
 type options struct {
 	capacity int32

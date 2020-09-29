@@ -1,4 +1,4 @@
-package mailbox
+package mailing
 
 import (
 	"context"
@@ -29,7 +29,7 @@ func dial(t *testing.T) (*redis.Client, *mongo.Client) {
 	}
 	return r, m
 }
-func TestMailbox(t *testing.T) {
+func TestMailing(t *testing.T) {
 	r, m := dial(t)
 	cli := New(remon.New(r, m))
 

@@ -1,4 +1,4 @@
-package mailbox
+package mailing
 
 import (
 	"context"
@@ -24,7 +24,7 @@ type data struct {
 	Que []*Mail `msgpack:"que"` // mail queue, ordered by id
 }
 
-// mailbox client
+// mailing client
 type Client struct {
 	client *remon.Client
 	opts   []Option
