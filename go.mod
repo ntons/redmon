@@ -1,4 +1,4 @@
-module github.com/ntons/remon-go
+module github.com/ntons/remon
 
 go 1.14
 
