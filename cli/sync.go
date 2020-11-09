@@ -5,7 +5,7 @@ import (
 	"sync"
 
 	log "github.com/ntons/log-go"
-	remon "github.com/ntons/remon-go"
+	"github.com/ntons/remon"
 )
 
 func Sync(ctx context.Context) {

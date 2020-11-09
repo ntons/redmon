@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"sort"
 
-	remon "github.com/ntons/remon-go"
+	"github.com/ntons/remon"
 	"github.com/vmihailenco/msgpack/v4"
 )
 
