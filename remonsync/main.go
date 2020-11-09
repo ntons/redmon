@@ -14,7 +14,7 @@ import (
 
 	"github.com/go-redis/redis/v7"
 	"github.com/ntons/log-go"
-	"github.com/ntons/remon-go"
+	"github.com/ntons/remon"
 	"go.mongodb.org/mongo-driver/mongo"
 	mongooptions "go.mongodb.org/mongo-driver/mongo/options"
 )
