@@ -10,125 +10,103 @@ import (
 	"github.com/vmihailenco/msgpack/v4"
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/mongo"
-	mongooptions "go.mongodb.org/mongo-driver/mongo/options"
+	"go.mongodb.org/mongo-driver/mongo/options"
 )
 
-type Sync struct {
-	o *options
+type SyncClient struct {
+	o *xOptions
 	r RedisClient
 	m *mongo.Client
 	// life-time control
-	ctx    context.Context
-	cancel context.CancelFunc
+	ctx  context.Context
+	stop context.CancelFunc
 	// rate limit
 	counter int32
 	cond    *sync.Cond
 }
 
-func NewSync(r RedisClient, m *mongo.Client, opts ...Option) *Sync {
+func NewSyncClient(r RedisClient, m *mongo.Client, opts ...Option) *SyncClient {
 	o := newOptions()
 	for _, opt := range opts {
 		opt.apply(o)
 	}
-	x := &Sync{o: o, r: r, m: m}
-	x.ctx, x.cancel = context.WithCancel(context.Background())
-	return x
+	ctx, stop := context.WithCancel(context.Background())
+	return &SyncClient{o: o, r: r, m: m, ctx: ctx, stop: stop}
+}
+func NewSync(r RedisClient, m *mongo.Client, opts ...Option) *SyncClient {
+	return NewSyncClient(r, m, opts...)
 }
 
-func (x *Sync) Close() { x.cancel() }
-
-func (x *Sync) checkRate() {
-}
-
-func (x *Sync) Serve() {
+func (cli *SyncClient) Serve() {
 	var tk *time.Ticker // rate limit beat generater
-	if x.o.rate > 0 {
-		tk = time.NewTicker(time.Second / time.Duration(x.o.rate))
+	if cli.o.syncRate > 0 {
+		tk = time.NewTicker(time.Second / time.Duration(cli.o.syncRate))
 		defer tk.Stop()
 	}
 	for {
-		k, d, err := x.peek()
-		for ; err == nil; k, d, err = x.next(k, d.Rev) {
-			if err = x.save(k, d); err != nil {
+		key, data, err := cli.peek()
+		for ; err == nil; key, data, err = cli.next(key, data.Rev) {
+			if err = cli.save(key, data); err != nil {
 				break
 			}
-			x.o.log.Debugf("sync: %s saved", k)
+			cli.o.log.Debugf("sync: %s saved", key)
 			if tk != nil {
 				select {
-				case <-x.ctx.Done():
+				case <-cli.ctx.Done():
 					return
 				case <-tk.C:
 				}
 			}
 		}
 		if err != redis.Nil {
-			x.o.log.Errorf("failed to sync: %v", err)
+			cli.o.log.Errorf("failed to sync: %v", err)
 		}
-		// no matter no dirty data or other error, halt 1 second
+		// no dirty data or other error, halt 1 second
 		select {
-		case <-x.ctx.Done():
+		case <-cli.ctx.Done():
 			return
 		case <-time.After(time.Second):
 		}
 	}
 }
 
-// peek top dirty key and data
-var peekScript = newScript(`local k=redis.call("LINDEX",":DIRTYQUE",-1);if not k then return end;local b = redis.call("GET",k);if not b then redis.call("RPOP",":DIRTYQUE");redis.call("SREM",":DIRTYSET",k);return end;return {k,b}`)
+func (cli *SyncClient) Stop() { cli.stop() }
 
-func (x *Sync) peek() (_ string, _ data, err error) {
-	return x.runScript(peekScript, []string{})
+// peek top dirty key and data
+func (cli *SyncClient) peek() (_ string, _ xData, err error) {
+	return cli.runScript(peekScript, []string{})
 }
 
 // clean dirty flag and make key volatile, then peek the next
-var nextScript = newScript(`
-if redis.call("LINDEX",":DIRTYQUE",-1)==KEYS[1] then
-    local b=redis.call("GET",KEYS[1])
-    if not b then
-        redis.call("RPOP",":DIRTYQUE")
-        redis.call("SREM",":DIRTYSET",KEYS[1])
-    else
-        local d=cmsgpack.unpack(b)
-        if tostring(d.rev)==ARGV[1] then
-            redis.call("RPOP",":DIRTYQUE")
-            redis.call("SREM",":DIRTYSET",KEYS[1])
-            redis.call("EXPIRE",KEYS[1],86400)
-        else
-            redis.call("RPOPLPUSH",":DIRTYQUE",":DIRTYQUE")
-        end
-    end
-end
-` + peekScript.src)
-
-func (x *Sync) next(key string, rev int64) (_ string, _ data, err error) {
-	return x.runScript(nextScript, []string{key}, rev)
+func (cli *SyncClient) next(
+	key string, rev int64) (_ string, _ xData, err error) {
+	return cli.runScript(nextScript, []string{key}, rev)
 }
 
-func (x *Sync) runScript(
+func (cli *SyncClient) runScript(
 	script *Script, keys []string, args ...interface{}) (
-	_ string, dat data, err error) {
-	v, err := script.Run(x.ctx, x.r, keys, args...).Result()
+	_ string, data xData, err error) {
+	v, err := script.Run(cli.ctx, cli.r, keys, args...).Result()
 	if err == redis.Nil {
-		// nothing to peek
-		return
+		return // nothing to peek
 	}
 	a, ok := v.([]interface{})
 	if !ok || len(a) != 2 {
 		panic(fmt.Errorf("unexpected return type: %T", v))
 	}
-	if err = msgpack.Unmarshal(s2b(a[1].(string)), &dat); err != nil {
+	if err = msgpack.Unmarshal(s2b(a[1].(string)), &data); err != nil {
 		return
 	}
-	return a[0].(string), dat, nil
+	return a[0].(string), data, nil
 }
 
-func (x *Sync) save(key string, dat data) (err error) {
-	database, collection, _id := x.o.keyMappingStrategy.MapKey(key)
-	_, err = x.m.Database(database).Collection(collection).UpdateOne(
+func (cli *SyncClient) save(key string, data xData) (err error) {
+	database, collection, _id := cli.o.keyMappingStrategy.MapKey(key)
+	_, err = cli.m.Database(database).Collection(collection).UpdateOne(
 		context.Background(),
 		bson.M{"_id": _id},
-		bson.M{"$set": &dat},
-		mongooptions.Update().SetUpsert(true),
+		bson.M{"$set": &data},
+		options.Update().SetUpsert(true),
 	)
 	return
 }

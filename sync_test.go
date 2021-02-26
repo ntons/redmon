@@ -11,7 +11,7 @@ import (
 	"github.com/vmihailenco/msgpack/v4"
 )
 
-func TestPeekNext(t *testing.T) {
+func TestSyncPeekNext(t *testing.T) {
 	r, m := dial(t)
 	s := NewSync(r, m)
 
@@ -25,7 +25,7 @@ func TestPeekNext(t *testing.T) {
 		t.Fatalf("unexpected peek error: %v", err)
 	}
 
-	b, _ := msgpack.Marshal(&data{Rev: 1, Val: val})
+	b, _ := msgpack.Marshal(xData{Rev: 1, Val: val})
 	r.Set(ctx, key, b2s(b), 0)
 	r.SAdd(ctx, ":DIRTYSET", key)
 	r.LPush(ctx, ":DIRTYQUE", key)

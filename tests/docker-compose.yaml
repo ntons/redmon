@@ -1,0 +1,14 @@
+version: "3"
+
+services:
+  remon-test-redis:
+    image: redis:6.0
+    container_name: remon-test-redis
+    ports:
+    - "6379:6379"
+  remon-test-mongo:
+    image: mongo:3.6
+    container_name: remon-test-mongo
+    ports:
+    - "27017:27017"
+

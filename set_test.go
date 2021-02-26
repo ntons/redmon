@@ -1,4 +1,4 @@
-package mailing
+package remon
 
 import (
 	"context"
@@ -6,32 +6,11 @@ import (
 	"math/rand"
 	"testing"
 	"time"
-
-	"github.com/go-redis/redis/v8"
-	"github.com/ntons/remon"
-	"go.mongodb.org/mongo-driver/mongo"
-	mongooptions "go.mongodb.org/mongo-driver/mongo/options"
 )
 
-func dial(t *testing.T) (*redis.Client, *mongo.Client) {
-	r := redis.NewClient(&redis.Options{
-		Addr: "127.0.0.1:6379",
-	})
-	m, err := mongo.NewClient(
-		mongooptions.Client().ApplyURI("mongodb://127.0.0.1"))
-	if err != nil {
-		t.Fatal("failed to new mongo client:", err)
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-	defer cancel()
-	if err := m.Connect(ctx); err != nil {
-		t.Fatal("failed to connect mongo server:", err)
-	}
-	return r, m
-}
-func TestMailing(t *testing.T) {
+func TestSet(t *testing.T) {
 	r, m := dial(t)
-	cli := New(remon.New(r, m))
+	cli := NewSetClient(New(r, m))
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
@@ -41,7 +20,7 @@ func TestMailing(t *testing.T) {
 
 	r.Del(ctx, key)
 	for i := 0; i < 10; i++ {
-		if id, err := cli.Push(ctx, key, val); err != nil {
+		if id, err := cli.Push(ctx, key, val, 0); err != nil {
 			t.Fatalf("unexpected push err: %v", err)
 		} else if id != fmt.Sprintf("%08X", i+1) {
 			t.Fatalf("unexpected push id: %v", id)
@@ -54,7 +33,7 @@ func TestMailing(t *testing.T) {
 		t.Fatalf("unexpected list len: %v", len(list))
 	} else {
 		for i := 0; i < 10; i++ {
-			if list[i].Id != fmt.Sprintf("%08X", i+1) || list[i].Content != val {
+			if list[i].Id != fmt.Sprintf("%08X", i+1) || list[i].Val != val {
 				t.Fatalf("unexpected list elem: %v", list[1])
 			}
 		}
@@ -111,7 +90,7 @@ func TestMailing(t *testing.T) {
 		}
 	}
 
-	if err := cli.Drain(ctx, key); err != nil {
+	if err := cli.Clean(ctx, key); err != nil {
 		t.Fatalf("unexpected drain err: %v", err)
 	} else if list, err := cli.List(ctx, key); err != nil {
 		t.Fatalf("unexpected list err: %v", err)
@@ -119,10 +98,9 @@ func TestMailing(t *testing.T) {
 		t.Fatalf("unexpected list len: %v", len(list))
 	}
 
-	if id, err := cli.Push(ctx, key, val); err != nil {
+	if id, err := cli.Push(ctx, key, val, 0); err != nil {
 		t.Fatalf("unexpected push err: %v", err)
 	} else if id != "0000000B" {
 		t.Fatalf("unexpected push id: %v", id)
 	}
-
 }

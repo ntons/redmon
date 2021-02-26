@@ -18,12 +18,12 @@ func init() {
 	rand.Seed(time.Now().UnixNano())
 }
 
-func rGetData(ctx context.Context, r *redis.Client, key string) (d data) {
+func rGetData(ctx context.Context, r *redis.Client, key string) (d xData) {
 	b, _ := r.Get(ctx, key).Bytes()
 	msgpack.Unmarshal(b, &d)
 	return
 }
-func rSetData(ctx context.Context, r *redis.Client, key string, d data) {
+func rSetData(ctx context.Context, r *redis.Client, key string, d xData) {
 	b, _ := msgpack.Marshal(&d)
 	r.Set(ctx, key, b2s(b), 0)
 }
@@ -45,9 +45,9 @@ func dial(t *testing.T) (*redis.Client, *mongo.Client) {
 	return r, m
 }
 
-func TestGet(t *testing.T) {
+func TestReMonGet(t *testing.T) {
 	r, m := dial(t)
-	rm := New(r, m)
+	cli := New(r, m).(*xClient)
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
@@ -55,40 +55,40 @@ func TestGet(t *testing.T) {
 	var key, val = fmt.Sprintf("%d", rand.Int()), "hello"
 
 	r.Del(ctx, key)
-	if _, err := rm.get(ctx, key); !isCacheMiss(err) {
+	if _, _, err := cli.get(ctx, key); !isCacheMiss(err) {
 		t.Fatalf("unexpected get err: %v", err)
 	}
 
-	rSetData(ctx, r, key, data{Rev: 0, Val: ""})
-	if _, err := rm.get(ctx, key); err != ErrNotFound {
+	rSetData(ctx, r, key, xData{Rev: 0, Val: ""})
+	if _, _, err := cli.get(ctx, key); err != ErrNotFound {
 		t.Fatalf("unexpected get err: %v", err)
 	}
 
-	rSetData(ctx, r, key, data{Rev: 1, Val: val})
-	if _val, err := rm.get(ctx, key); err != nil {
+	rSetData(ctx, r, key, xData{Rev: 1, Val: val})
+	if _, _val, err := cli.get(ctx, key); err != nil {
 		t.Fatalf("unexpected get err: %v", err)
 	} else if _val != val {
 		t.Fatalf("unexpected get val: %v", _val)
 	}
 
-	rSetData(ctx, r, key, data{Rev: 0, Val: ""})
-	if _val, err := rm.get(ctx, key, AddIfNotFound(val)); err != nil {
+	rSetData(ctx, r, key, xData{Rev: 0, Val: ""})
+	if _, _val, err := cli.get(ctx, key, AddIfNotFound(val)); err != nil {
 		t.Fatalf("unexpected get err: %v", err)
 	} else if _val != val {
 		t.Fatalf("unexpected get val: %v", _val)
 	}
 
 	r.Del(ctx, key)
-	if _val, err := rm.Get(ctx, key, AddIfNotFound(val)); err != nil {
+	if _, _val, err := cli.Get(ctx, key, AddIfNotFound(val)); err != nil {
 		t.Fatalf("unexpected get err: %v", err)
 	} else if _val != val {
 		t.Fatalf("unexpected get val: %v", _val)
 	}
 }
 
-func TestSet(t *testing.T) {
+func TestReMonSet(t *testing.T) {
 	r, m := dial(t)
-	rm := New(r, m)
+	cli := New(r, m).(*xClient)
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
@@ -96,14 +96,14 @@ func TestSet(t *testing.T) {
 	var key, val = fmt.Sprintf("%d", rand.Int()), "hello"
 
 	r.Del(ctx, key)
-	if err := rm.set(ctx, key, val); !isCacheMiss(err) {
+	if _, err := cli.set(ctx, key, val); !isCacheMiss(err) {
 		t.Fatalf("unexpected set err: %v", err)
 	}
 
-	var d = data{Rev: 0}
+	var d = xData{Rev: 0}
 	b, _ := msgpack.Marshal(&d)
 	r.Set(ctx, key, b2s(b), 0)
-	if err := rm.set(ctx, key, val); err != nil {
+	if _, err := cli.set(ctx, key, val); err != nil {
 		t.Fatalf("unexpected set err: %v", err)
 	}
 	b, _ = r.Get(ctx, key).Bytes()
@@ -115,7 +115,7 @@ func TestSet(t *testing.T) {
 		t.Fatalf("unexpected set val: %v", d.Val)
 	}
 
-	if err := rm.set(ctx, key, val); err != nil {
+	if _, err := cli.set(ctx, key, val); err != nil {
 		t.Fatalf("unexpected set err: %v", err)
 	}
 	b, _ = r.Get(ctx, key).Bytes()
@@ -128,9 +128,9 @@ func TestSet(t *testing.T) {
 	}
 }
 
-func TestAdd(t *testing.T) {
+func TestReMonAdd(t *testing.T) {
 	r, m := dial(t)
-	rm := New(r, m)
+	cli := New(r, m).(*xClient)
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
@@ -138,24 +138,24 @@ func TestAdd(t *testing.T) {
 	var key, val = fmt.Sprintf("%d", rand.Int()), "hello"
 
 	r.Del(ctx, key)
-	if err := rm.add(ctx, key, val); !isCacheMiss(err) {
+	if err := cli.add(ctx, key, val); !isCacheMiss(err) {
 		t.Fatalf("unexpected add err: %v", err)
 	}
 
-	var d = data{Rev: 0}
+	var d = xData{Rev: 0}
 	b, _ := msgpack.Marshal(&d)
 	r.Set(ctx, key, b2s(b), 0)
-	if err := rm.add(ctx, key, val); err != nil {
+	if err := cli.add(ctx, key, val); err != nil {
 		t.Fatalf("unexpected add err: %v", err)
 	}
-	if err := rm.add(ctx, key, val); err != ErrAlreadyExists {
+	if err := cli.add(ctx, key, val); err != ErrAlreadyExists {
 		t.Fatalf("unexpected add err: %v", err)
 	}
 }
 
-func TestLoad(t *testing.T) {
+func TestReMonLoad(t *testing.T) {
 	r, m := dial(t)
-	rm := New(r, m)
+	cli := New(r, m).(*xClient)
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
@@ -171,7 +171,7 @@ func TestLoad(t *testing.T) {
 	r.Del(ctx, key)
 	m.Database(database).Collection(collection).DeleteOne(
 		ctx, bson.M{"_id": _id})
-	if err := rm.load(ctx, key); err != nil {
+	if err := cli.load(ctx, key); err != nil {
 		t.Fatalf("unexpected load err: %v", err)
 	}
 	if d := rGetData(ctx, r, key); d.Rev != 0 {
@@ -182,7 +182,7 @@ func TestLoad(t *testing.T) {
 	m.Database(database).Collection(collection).InsertOne(
 		ctx, bson.M{"_id": _id, "rev": 1, "val": val})
 
-	if err := rm.load(ctx, key); err != nil {
+	if err := cli.load(ctx, key); err != nil {
 		t.Fatalf("unexpected load err: %v", err)
 	}
 	if d := rGetData(ctx, r, key); d.Rev != 1 {
@@ -192,9 +192,9 @@ func TestLoad(t *testing.T) {
 	}
 }
 
-func TestEval(t *testing.T) {
+func TestReMonEval(t *testing.T) {
 	r, m := dial(t)
-	rm := New(r, m)
+	cli := New(r, m)
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
@@ -202,9 +202,9 @@ func TestEval(t *testing.T) {
 	var key, val = fmt.Sprintf("%d", rand.Int()), "hello"
 	defer r.Del(ctx, key)
 
-	rSetData(ctx, r, key, data{Rev: 1, Val: val})
-	if s, err := rm.Eval(
-		ctx, NewEvalScript(`return VALUE`), key,
+	rSetData(ctx, r, key, xData{Rev: 1, Val: val})
+	if s, err := cli.Eval(
+		ctx, newEvalScript(`return VALUE`), key,
 	).Text(); err != nil {
 		t.Fatalf("unexpected eval error: %v", err)
 	} else if s != val {
@@ -215,8 +215,8 @@ func TestEval(t *testing.T) {
 		t.Fatalf("unexpected eval val: %v", d.Val)
 	}
 
-	if s, err := rm.Eval(
-		ctx, NewEvalScript(`VALUE="foo";return VALUE`), key,
+	if s, err := cli.Eval(
+		ctx, newEvalScript(`VALUE="foo";return VALUE`), key,
 	).Text(); err != nil {
 		t.Fatalf("unexpected eval error: %v", err)
 	} else if s != "foo" {
