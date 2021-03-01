@@ -19,17 +19,29 @@ type RedisClient interface {
 }
 
 type Client interface {
-	Stat() Stat
+	// get stat info
+	Stat() *Stat
+
+	// Get value from remon
+	// If cache miss, load from database
 	Get(ctx context.Context, key string, opts ...GetOption) (rev int64, val string, err error)
-	GetBytes(ctx context.Context, key string, opts ...GetOption) (int64, []byte, error)
+
+	// Set value to remon
+	// Value will be saved to cache and synced to database later automatically
 	Set(ctx context.Context, key, val string) (rev int64, err error)
-	SetBytes(ctx context.Context, key string, val []byte) (rev int64, err error)
+
+	// Add value to remon
+	// If key already exists, return ErrAlreadyExists
+	// If add success, the rev must be 1
 	Add(ctx context.Context, key, val string) (err error)
-	AddBytes(ctx context.Context, key string, val []byte) (err error)
+
+	// Eval execute a script on value, modified value will be saved automatically
+	// It's dangerous to eval untrusted script, so this method is only used to
+	// extend remon abilities
 	Eval(ctx context.Context, script *Script, key string, args ...interface{}) (cmd *redis.Cmd)
 }
 
-// CACHE/DB 存储结构
+// REDIS存储数据对象(cmsgpack不接受bin数据类型，只能用string)
 type xData struct {
 	// 数据版本号，每次修改都会递增。
 	// lua的number是由double实现，一般情况下有52bits尾数位，因此最大支持
@@ -39,31 +51,34 @@ type xData struct {
 	Val string `msgpack:"val" bson:"val" json:"val"`
 }
 
+// MONGO存储数据对象
+type xDataBytes struct {
+	Rev int64  `msgpack:"rev" bson:"rev" json:"rev"`
+	Val []byte `msgpack:"val" bson:"val" json:"val"`
+}
+
 var _ Client = (*xClient)(nil)
 
 type xClient struct {
-	o *xOptions
-	r RedisClient
-	m *mongo.Client
-	s Stat
+	opts *xOptions
+	rdb  RedisClient
+	mdb  *mongo.Client
+	stat Stat
 }
 
-func NewClient(r RedisClient, m *mongo.Client, opts ...Option) Client {
+func NewClient(rdb RedisClient, mdb *mongo.Client, opts ...Option) Client {
 	o := newOptions()
 	for _, opt := range opts {
 		opt.apply(o)
 	}
-	return &xClient{o: o, r: r, m: m}
+	return &xClient{opts: o, rdb: rdb, mdb: mdb}
 }
-func New(r RedisClient, m *mongo.Client, opts ...Option) Client {
-	return NewClient(r, m, opts...)
+func New(rdb RedisClient, mdb *mongo.Client, opts ...Option) Client {
+	return NewClient(rdb, mdb, opts...)
 }
 
-// get stat info
-func (cli *xClient) Stat() Stat { return cli.s }
+func (cli *xClient) Stat() *Stat { return &cli.stat }
 
-// Get value from remon
-// If cache miss, load from database
 func (cli *xClient) Get(
 	ctx context.Context, key string, opts ...GetOption) (
 	rev int64, val string, err error) {
@@ -75,17 +90,7 @@ func (cli *xClient) Get(
 	}
 	return
 }
-func (cli *xClient) GetBytes(
-	ctx context.Context, key string, opts ...GetOption) (int64, []byte, error) {
-	if rev, s, err := cli.Get(ctx, key, opts...); err != nil {
-		return 0, nil, err
-	} else {
-		return rev, s2b(s), nil
-	}
-}
 
-// Set value to remon
-// Value will be saved to cache and synced to database later automatically
 func (cli *xClient) Set(
 	ctx context.Context, key, val string) (rev int64, err error) {
 	if rev, err = cli.set(ctx, key, val); isCacheMiss(err) {
@@ -96,14 +101,7 @@ func (cli *xClient) Set(
 	}
 	return
 }
-func (cli *xClient) SetBytes(
-	ctx context.Context, key string, val []byte) (rev int64, err error) {
-	return cli.Set(ctx, key, b2s(val))
-}
 
-// Add value to remon
-// If key already exists, return ErrAlreadyExists
-// If add success, the rev must be 1
 func (cli *xClient) Add(ctx context.Context, key, val string) (err error) {
 	if err = cli.add(ctx, key, val); isCacheMiss(err) {
 		if err = cli.load(ctx, key); err != nil {
@@ -113,14 +111,7 @@ func (cli *xClient) Add(ctx context.Context, key, val string) (err error) {
 	}
 	return
 }
-func (cli *xClient) AddBytes(
-	ctx context.Context, key string, val []byte) (err error) {
-	return cli.Add(ctx, key, b2s(val))
-}
 
-// Eval execute a script on value, modified value will be saved automatically
-// It's dangerous to eval untrusted script, so this method is only used to
-// extend remon abilities
 func (cli *xClient) Eval(
 	ctx context.Context, script *Script, key string, args ...interface{}) (
 	cmd *redis.Cmd) {
@@ -137,7 +128,7 @@ func (cli *xClient) Eval(
 func (cli *xClient) runScript(
 	ctx context.Context, script *Script, key string, args ...interface{}) (
 	cmd *redis.Cmd) {
-	cmd = script.Run(ctx, cli.r, []string{key}, args...)
+	cmd = script.Run(ctx, cli.rdb, []string{key}, args...)
 	if err := cmd.Err(); err != nil {
 		if err == redis.Nil {
 			cmd.SetErr(nil) // not regard redis.Nil as error
@@ -147,12 +138,12 @@ func (cli *xClient) runScript(
 	}
 	if err := cmd.Err(); err != nil {
 		if isCacheMiss(err) {
-			cli.s.cacheMiss++
+			cli.stat.incrCacheMiss()
 		} else {
-			cli.s.redisError++
+			cli.stat.incrRedisError()
 		}
 	} else {
-		cli.s.cacheHit++
+		cli.stat.incrCacheHit()
 	}
 	return
 }
@@ -174,9 +165,9 @@ func (cli *xClient) get(
 		return
 	}
 	var data xData
-	if err = msgpack.Unmarshal(s2b(s), &data); err != nil {
-		cli.o.log.Errorf("failed to unmarshal data: %v", err)
-		cli.s.dataError++
+	if err = msgpack.Unmarshal(fastStringToBytes(s), &data); err != nil {
+		cli.opts.log.Errorf("failed to unmarshal data: %v", err)
+		cli.stat.incrDataError()
 		return
 	}
 	if data.Rev == 0 {
@@ -204,24 +195,28 @@ func (cli *xClient) add(ctx context.Context, key, val string) error {
 // Load data from database to cache
 // Cache only be updated when not exists or the loaded data is newer
 func (cli *xClient) load(ctx context.Context, key string) (err error) {
-	database, collection, _id := cli.o.keyMappingStrategy.MapKey(key)
-	var data xData
-	if err = cli.m.Database(database).Collection(collection).FindOne(
+	database, collection, _id := cli.opts.keyMappingStrategy.MapKey(key)
+	var data xDataBytes
+	if err = cli.mdb.Database(database).Collection(collection).FindOne(
 		ctx, bson.M{"_id": _id}).Decode(&data); err != nil {
 		if err != mongo.ErrNoDocuments {
-			cli.o.log.Errorf("failed to load data from mongo: %v", err)
-			cli.s.mongoError++
+			cli.opts.log.Errorf("failed to load data from mongo: %v", err)
+			cli.stat.incrMongoError()
 			return
 		}
 		err = nil
 	}
-	var b []byte
-	if b, err = msgpack.Marshal(&data); err != nil {
-		cli.o.log.Errorf("failed to marshal data: %v", err)
-		cli.s.dataError++
+	var buf []byte
+	if buf, err = msgpack.Marshal(&xData{
+		Rev: data.Rev,
+		Val: fastBytesToString(data.Val),
+	}); err != nil {
+		cli.opts.log.Errorf("failed to marshal data: %v", err)
+		cli.stat.incrDataError()
 		return
 	}
-	if err = cli.runScript(ctx, luaLoad, key, b2s(b)).Err(); err != nil {
+	if err = cli.runScript(
+		ctx, luaLoad, key, fastBytesToString(buf)).Err(); err != nil {
 		return
 	}
 	return

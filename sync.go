@@ -14,9 +14,9 @@ import (
 )
 
 type SyncClient struct {
-	o *xOptions
-	r RedisClient
-	m *mongo.Client
+	opts *xOptions
+	rdb  RedisClient
+	mdb  *mongo.Client
 	// life-time control
 	ctx  context.Context
 	stop context.CancelFunc
@@ -25,23 +25,24 @@ type SyncClient struct {
 	cond    *sync.Cond
 }
 
-func NewSyncClient(r RedisClient, m *mongo.Client, opts ...Option) *SyncClient {
+func NewSyncClient(
+	rdb RedisClient, mdb *mongo.Client, opts ...Option) *SyncClient {
 	o := newOptions()
 	for _, opt := range opts {
 		opt.apply(o)
 	}
 	ctx, stop := context.WithCancel(context.Background())
-	return &SyncClient{o: o, r: r, m: m, ctx: ctx, stop: stop}
+	return &SyncClient{opts: o, rdb: rdb, mdb: mdb, ctx: ctx, stop: stop}
 }
-func NewSync(r RedisClient, m *mongo.Client, opts ...Option) *SyncClient {
-	return NewSyncClient(r, m, opts...)
+func NewSync(rdb RedisClient, mdb *mongo.Client, opts ...Option) *SyncClient {
+	return NewSyncClient(rdb, mdb, opts...)
 }
 
 func (cli *SyncClient) Serve() {
-	var tk *time.Ticker // rate limit beat generater
-	if cli.o.syncRate > 0 {
-		tk = time.NewTicker(time.Second / time.Duration(cli.o.syncRate))
-		defer tk.Stop()
+	var tick *time.Ticker // rate limit beat generater
+	if cli.opts.syncRate > 0 {
+		tick = time.NewTicker(time.Second / time.Duration(cli.opts.syncRate))
+		defer tick.Stop()
 	}
 	for {
 		key, data, err := cli.peek()
@@ -49,17 +50,17 @@ func (cli *SyncClient) Serve() {
 			if err = cli.save(key, data); err != nil {
 				break
 			}
-			cli.o.log.Debugf("sync: %s saved", key)
-			if tk != nil {
+			cli.opts.log.Debugf("sync: %s saved", key)
+			if tick != nil {
 				select {
 				case <-cli.ctx.Done():
 					return
-				case <-tk.C:
+				case <-tick.C:
 				}
 			}
 		}
 		if err != redis.Nil {
-			cli.o.log.Errorf("failed to sync: %v", err)
+			cli.opts.log.Errorf("failed to sync: %v", err)
 		}
 		// no dirty data or other error, halt 1 second
 		select {
@@ -73,39 +74,48 @@ func (cli *SyncClient) Serve() {
 func (cli *SyncClient) Stop() { cli.stop() }
 
 // peek top dirty key and data
-func (cli *SyncClient) peek() (_ string, _ xData, err error) {
-	return cli.runScript(peekScript, []string{})
+func (cli *SyncClient) peek() (string, xData, error) {
+	return cli.runScript(luaPeek, "", 0)
 }
 
 // clean dirty flag and make key volatile, then peek the next
-func (cli *SyncClient) next(
-	key string, rev int64) (_ string, _ xData, err error) {
-	return cli.runScript(nextScript, []string{key}, rev)
+func (cli *SyncClient) next(key string, rev int64) (string, xData, error) {
+	return cli.runScript(luaNext, key, rev)
 }
 
-func (cli *SyncClient) runScript(
-	script *Script, keys []string, args ...interface{}) (
+func (cli *SyncClient) runScript(script *Script, key string, rev int64) (
 	_ string, data xData, err error) {
-	v, err := script.Run(cli.ctx, cli.r, keys, args...).Result()
-	if err == redis.Nil {
-		return // nothing to peek
+	var (
+		keys []string
+		args []interface{}
+	)
+	if key != "" && rev > 0 {
+		keys, args = []string{key}, []interface{}{rev}
 	}
-	a, ok := v.([]interface{})
+	r, err := script.Run(cli.ctx, cli.rdb, keys, args...).Result()
+	if err != nil {
+		return
+	}
+	a, ok := r.([]interface{})
 	if !ok || len(a) != 2 {
-		panic(fmt.Errorf("unexpected return type: %T", v))
+		panic(fmt.Errorf("unexpected return type: %T", r))
 	}
-	if err = msgpack.Unmarshal(s2b(a[1].(string)), &data); err != nil {
+	if err = msgpack.Unmarshal(
+		fastStringToBytes(a[1].(string)), &data); err != nil {
 		return
 	}
 	return a[0].(string), data, nil
 }
 
 func (cli *SyncClient) save(key string, data xData) (err error) {
-	database, collection, _id := cli.o.keyMappingStrategy.MapKey(key)
-	_, err = cli.m.Database(database).Collection(collection).UpdateOne(
+	database, collection, _id := cli.opts.keyMappingStrategy.MapKey(key)
+	_, err = cli.mdb.Database(database).Collection(collection).UpdateOne(
 		context.Background(),
 		bson.M{"_id": _id},
-		bson.M{"$set": &data},
+		bson.M{"$set": &xDataBytes{
+			Rev: data.Rev,
+			Val: fastStringToBytes(data.Val),
+		}},
 		options.Update().SetUpsert(true),
 	)
 	return

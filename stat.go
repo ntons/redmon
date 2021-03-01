@@ -1,35 +1,26 @@
 package remon
 
-// remon statistics
+import (
+	"sync/atomic"
+)
+
+// client wide statistics
 type Stat struct {
-	cacheHit   int64
-	cacheMiss  int64
-	redisError int64
-	mongoError int64
-	dataError  int64
+	cacheHit   int64 // cache hit counter
+	cacheMiss  int64 // cache miss counter
+	redisError int64 // redis error counter
+	mongoError int64 // mongo error counter
+	dataError  int64 // data marshal/unmarshal error counter
 }
 
-// redis cache hit rate
-func (s *Stat) HitRate() float64 {
-	return float64(s.cacheHit) / float64(s.cacheHit+s.cacheMiss)
-}
+func (s *Stat) CacheHit() int64   { return atomic.LoadInt64(&s.cacheHit) }
+func (s *Stat) CacheMiss() int64  { return atomic.LoadInt64(&s.cacheMiss) }
+func (s *Stat) RedisError() int64 { return atomic.LoadInt64(&s.redisError) }
+func (s *Stat) MongoError() int64 { return atomic.LoadInt64(&s.mongoError) }
+func (s *Stat) DataError() int64  { return atomic.LoadInt64(&s.dataError) }
 
-// redis cache miss rate
-func (s *Stat) MissRate() float64 {
-	return float64(s.cacheMiss) / float64(s.cacheHit+s.cacheMiss)
-}
-
-// redis error count, cache miss is not included
-func (s *Stat) RedisErrorCount() int64 {
-	return s.redisError
-}
-
-// mongo error count, not found is not included
-func (s *Stat) MongoErrorCount() int64 {
-	return s.mongoError
-}
-
-// data marshal/unmarshal error count
-func (s *Stat) DataErrorCount() int64 {
-	return s.dataError
-}
+func (s *Stat) incrCacheHit()   { atomic.AddInt64(&s.cacheHit, 1) }
+func (s *Stat) incrCacheMiss()  { atomic.AddInt64(&s.cacheMiss, 1) }
+func (s *Stat) incrRedisError() { atomic.AddInt64(&s.redisError, 1) }
+func (s *Stat) incrMongoError() { atomic.AddInt64(&s.mongoError, 1) }
+func (s *Stat) incrDataError()  { atomic.AddInt64(&s.dataError, 1) }

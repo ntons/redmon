@@ -29,7 +29,7 @@ func (xDefaultKeyMappingStrategy) MapKey(key string) (_, _, _ string) {
 	case 2:
 		return "remon", a[0], a[1]
 	default:
-		return "remon", "default", key
+		return "remon", "data", key
 	}
 }
 
@@ -85,23 +85,49 @@ func WithLogger(logger log.Recorder) Option {
 }
 
 // get method xOptions
+type GetOption interface {
+	apply(o *xGetOptions)
+}
 type xGetOptions struct {
 	// add or set atomically
 	addIfNotFound *string
 }
-
-type GetOption interface {
-	apply(o *xGetOptions)
-}
-
 type xFuncGetOption struct {
 	f func(o *xGetOptions)
 }
 
-func (f xFuncGetOption) apply(o *xGetOptions) {
-	f.f(o)
+func (f xFuncGetOption) apply(o *xGetOptions) { f.f(o) }
+
+func AddIfNotFound(v string) GetOption {
+	return xFuncGetOption{func(o *xGetOptions) { o.addIfNotFound = &v }}
 }
 
-func AddIfNotFound(val string) GetOption {
-	return xFuncGetOption{func(o *xGetOptions) { o.addIfNotFound = &val }}
+// push method options
+type PushStrategy int
+
+const (
+	RejectOnFull     PushStrategy = 0
+	PullOldestOnFull PushStrategy = 1
+)
+
+type PushOption interface {
+	apply(o *xPushOptions)
+}
+type xPushOptions struct {
+	// capacity of set
+	capacity int
+	// full strategy
+	strategy PushStrategy
+}
+type xFuncPushOption struct {
+	f func(o *xPushOptions)
+}
+
+func (f xFuncPushOption) apply(o *xPushOptions) { f.f(o) }
+
+func WithCapacity(v int) PushOption {
+	return xFuncPushOption{func(o *xPushOptions) { o.capacity = v }}
+}
+func WithPushStrategy(v PushStrategy) PushOption {
+	return xFuncPushOption{func(o *xPushOptions) { o.strategy = v }}
 }

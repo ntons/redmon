@@ -19,16 +19,16 @@ func TestSyncPeekNext(t *testing.T) {
 	defer cancel()
 
 	var key, val = fmt.Sprintf("%d", rand.Int()), "hello"
-	r.Del(ctx, ":DIRTYQUE", ":DIRTYSET", key)
+	r.Del(ctx, xDirtyQue, xDirtySet, key)
 
 	if _, _, err := s.peek(); err != redis.Nil {
 		t.Fatalf("unexpected peek error: %v", err)
 	}
 
 	b, _ := msgpack.Marshal(xData{Rev: 1, Val: val})
-	r.Set(ctx, key, b2s(b), 0)
-	r.SAdd(ctx, ":DIRTYSET", key)
-	r.LPush(ctx, ":DIRTYQUE", key)
+	r.Set(ctx, key, fastBytesToString(b), 0)
+	r.SAdd(ctx, xDirtySet, key)
+	r.LPush(ctx, xDirtyQue, key)
 
 	if k, d, err := s.peek(); err != nil {
 		t.Fatalf("unexpected peek error: %v", err)

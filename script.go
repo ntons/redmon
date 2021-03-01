@@ -106,6 +106,9 @@ func (script *Script) Run(
 }
 
 const (
+	xDirtySet = "$DIRTYSET$"
+	xDirtyQue = "$DIRTYQUE$"
+
 	evalScriptTmpl = `
 local b=redis.call("GET", KEYS[1])
 if not b then error("CACHE_MISS") end
@@ -119,8 +122,8 @@ local r=f()
 if d.val~=e.VALUE then
   d.rev,d.val=d.rev+1,e.VALUE
   redis.call("SET",KEYS[1],cmsgpack.pack(d))
-  if redis.call("SADD",":DIRTYSET",KEYS[1])>0 then
-    redis.call("LPUSH",":DIRTYQUE",KEYS[1])
+  if redis.call("SADD","` + xDirtySet + `",KEYS[1])>0 then
+    redis.call("LPUSH","` + xDirtyQue + `",KEYS[1])
   end
 end
 return r`
@@ -140,8 +143,8 @@ if d.rev==0 and ARGV[1] then
   d.rev,d.val=d.rev+1,ARGV[1]
   b=cmsgpack.pack(d)
   redis.call("SET",KEYS[1],b)
-  if redis.call("SADD",":DIRTYSET",KEYS[1])>0 then
-    redis.call("LPUSH",":DIRTYQUE",KEYS[1])
+  if redis.call("SADD","` + xDirtySet + `",KEYS[1])>0 then
+    redis.call("LPUSH","` + xDirtyQue + `",KEYS[1])
   end
 end
 return b
@@ -153,8 +156,8 @@ if not b then error("CACHE_MISS") end
 local d=cmsgpack.unpack(b)
 d.rev,d.val=d.rev+1,ARGV[1]
 redis.call("SET",KEYS[1],cmsgpack.pack(d))
-if redis.call("SADD",":DIRTYSET",KEYS[1])>0 then
-  redis.call("LPUSH",":DIRTYQUE",KEYS[1])
+if redis.call("SADD","` + xDirtySet + `",KEYS[1])>0 then
+  redis.call("LPUSH","` + xDirtyQue + `",KEYS[1])
 end
 return d.rev
 `)
@@ -166,8 +169,8 @@ local d=cmsgpack.unpack(b)
 if d.rev~=0 then return 0 end
 d.rev,d.val=d.rev+1,ARGV[1]
 redis.call("SET",KEYS[1],cmsgpack.pack(d))
-if redis.call("SADD",":DIRTYSET",KEYS[1])>0 then
-  redis.call("LPUSH",":DIRTYQUE",KEYS[1])
+if redis.call("SADD","` + xDirtySet + `",KEYS[1])>0 then
+  redis.call("LPUSH","` + xDirtyQue + `",KEYS[1])
 end
 return 1
 `)
@@ -181,69 +184,69 @@ return 0
 `)
 
 	// Scripts for Sync
-	peekScript = newScript(`
-local k=redis.call("LINDEX",":DIRTYQUE",-1)
+	luaPeek = newScript(`
+local k=redis.call("LINDEX","` + xDirtyQue + `",-1)
 if not k then return end
 local b=redis.call("GET",k)
 if not b then
-  redis.call("RPOP",":DIRTYQUE")
-  redis.call("SREM",":DIRTYSET",k)
+  redis.call("RPOP","` + xDirtyQue + `")
+  redis.call("SREM","` + xDirtySet + `",k)
   return
 end
 return {k,b}
 `)
 
-	nextScript = newScript(`
-if redis.call("LINDEX",":DIRTYQUE",-1)==KEYS[1] then
+	luaNext = newScript(`
+if redis.call("LINDEX","` + xDirtyQue + `",-1)==KEYS[1] then
   local b=redis.call("GET",KEYS[1])
   if not b then
-    redis.call("RPOP",":DIRTYQUE")
-    redis.call("SREM",":DIRTYSET",KEYS[1])
+    redis.call("RPOP","` + xDirtyQue + `")
+    redis.call("SREM","` + xDirtySet + `",KEYS[1])
   else
     local d=cmsgpack.unpack(b)
     if tostring(d.rev)==ARGV[1] then
-      redis.call("RPOP",":DIRTYQUE")
-      redis.call("SREM",":DIRTYSET",KEYS[1])
+      redis.call("RPOP","` + xDirtyQue + `")
+      redis.call("SREM","` + xDirtySet + `",KEYS[1])
       redis.call("EXPIRE",KEYS[1],86400)
     else
-      redis.call("RPOPLPUSH",":DIRTYQUE",":DIRTYQUE")
+      redis.call("RPOPLPUSH","` + xDirtyQue + `","` + xDirtyQue + `")
     end
   end
 end
-` + peekScript.src)
+` + luaPeek.src)
 
-	// Scripts for Set
 	luaPush = newEvalScript(`
 local d={seq=0,que={}}
 if #VALUE>0 then d=cmsgpack.unpack(VALUE) end
-d.seq=d.seq+1
-local id=string.format("%08X",d.seq)
-d.que[#d.que+1]={id=id,val=ARGV[1]}
-if ARGV[2] then
-  local cap=tonumber(ARGV[2])
-  while cap>0 and #d.que>cap do
-    table.remove(d.que,1)
+local cap=tonumber(ARGV[2])
+if cap>0 and #d.que>=cap then
+  if ARGV[3]==1 then
+    while #d.que>=cap do table.remove(d.que,1) end
+  else
+    return -1
   end
 end
+d.seq=d.seq+1
+d.que[#d.que+1]={id=d.seq,val=ARGV[1]}
 VALUE=cmsgpack.pack(d)
-return id
+return d.seq
 `)
 
 	luaPull = newEvalScript(`
 local d={seq=0,que={}}
 if #VALUE>0 then d=cmsgpack.unpack(VALUE) end
 local i,n,r=1,#d.que,{}
-for _, id in ipairs(ARGV) do
-  local j=#d.que
+for _,id in ipairs(ARGV) do
+  local j,v=#d.que,tonumber(id)
   while i<=j do
     local k=math.floor((i+j)/2)
-	if d.que[k].id < id then
-	  i = k + 1
-	elseif d.que[k].id > id then
-	  j = k - 1
+	if d.que[k].id<v then
+	  i=k+1
+	elseif d.que[k].id>v then
+	  j=k-1
 	else
 	  r[#r+1]=d.que[k].id
-	  table.remove(d.que, k)
+	  table.remove(d.que,k)
 	  break
 	end
   end
@@ -252,7 +255,7 @@ if #d.que~=n then VALUE=cmsgpack.pack(d) end
 return r
 `)
 
-	luaDrain = newEvalScript(`
+	luaClean = newEvalScript(`
 local d={seq=0,que={}}
 if #VALUE>0 then d=cmsgpack.unpack(VALUE) end
 if #d.que>0 then VALUE=cmsgpack.pack({seq=d.seq,que={}}) end

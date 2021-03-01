@@ -8,6 +8,7 @@ import (
 var (
 	ErrAlreadyExists = errors.New("already exists")
 	ErrNotFound      = errors.New("not found")
+	ErrMailFull      = errors.New("mail full")
 	errCacheMiss     = errors.New("cache miss")
 )
 
@@ -18,8 +19,7 @@ func isCacheMiss(err error) bool {
 	if err == errCacheMiss {
 		return true
 	}
-	var s = strings.TrimSpace(err.Error())
-	const s1 = "ERR Error running script"
-	const s2 = "CACHE_MISS"
-	return strings.HasPrefix(s, s1) && strings.HasSuffix(s, s2)
+	var str = strings.TrimSpace(err.Error())
+	return strings.HasPrefix(str, "ERR Error running script") &&
+		strings.HasSuffix(str, "CACHE_MISS")
 }

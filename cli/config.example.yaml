@@ -1,6 +1,0 @@
-
-redis: 127.0.0.1:6379
-mongo: mongodb://127.0.0.1
-
-sync:
-  rate: 10

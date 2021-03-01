@@ -25,7 +25,7 @@ func rGetData(ctx context.Context, r *redis.Client, key string) (d xData) {
 }
 func rSetData(ctx context.Context, r *redis.Client, key string, d xData) {
 	b, _ := msgpack.Marshal(&d)
-	r.Set(ctx, key, b2s(b), 0)
+	r.Set(ctx, key, fastBytesToString(b), 0)
 }
 
 func dial(t *testing.T) (*redis.Client, *mongo.Client) {
@@ -102,7 +102,7 @@ func TestReMonSet(t *testing.T) {
 
 	var d = xData{Rev: 0}
 	b, _ := msgpack.Marshal(&d)
-	r.Set(ctx, key, b2s(b), 0)
+	r.Set(ctx, key, fastBytesToString(b), 0)
 	if _, err := cli.set(ctx, key, val); err != nil {
 		t.Fatalf("unexpected set err: %v", err)
 	}
@@ -144,7 +144,7 @@ func TestReMonAdd(t *testing.T) {
 
 	var d = xData{Rev: 0}
 	b, _ := msgpack.Marshal(&d)
-	r.Set(ctx, key, b2s(b), 0)
+	r.Set(ctx, key, fastBytesToString(b), 0)
 	if err := cli.add(ctx, key, val); err != nil {
 		t.Fatalf("unexpected add err: %v", err)
 	}
@@ -180,7 +180,7 @@ func TestReMonLoad(t *testing.T) {
 
 	r.Del(ctx, key)
 	m.Database(database).Collection(collection).InsertOne(
-		ctx, bson.M{"_id": _id, "rev": 1, "val": val})
+		ctx, bson.M{"_id": _id, "rev": 1, "val": []byte(val)})
 
 	if err := cli.load(ctx, key); err != nil {
 		t.Fatalf("unexpected load err: %v", err)
