@@ -13,6 +13,39 @@ import (
 	"go.mongodb.org/mongo-driver/mongo/options"
 )
 
+var (
+	luaPeek = newScript(`
+local k=redis.call("LINDEX","` + xDirtyQue + `",-1)
+if not k then return end
+local b=redis.call("GET",k)
+if not b then
+  redis.call("RPOP","` + xDirtyQue + `")
+  redis.call("SREM","` + xDirtySet + `",k)
+  return
+end
+return {k,b}
+`)
+
+	luaNext = newScript(`
+if redis.call("LINDEX","` + xDirtyQue + `",-1)==KEYS[1] then
+  local b=redis.call("GET",KEYS[1])
+  if not b then
+    redis.call("RPOP","` + xDirtyQue + `")
+    redis.call("SREM","` + xDirtySet + `",KEYS[1])
+  else
+    local d=cmsgpack.unpack(b)
+    if tostring(d.rev)==ARGV[1] then
+      redis.call("RPOP","` + xDirtyQue + `")
+      redis.call("SREM","` + xDirtySet + `",KEYS[1])
+      redis.call("EXPIRE",KEYS[1],86400)
+    else
+      redis.call("RPOPLPUSH","` + xDirtyQue + `","` + xDirtyQue + `")
+    end
+  end
+end
+` + luaPeek.src)
+)
+
 type SyncClient struct {
 	opts *xOptions
 	rdb  RedisClient
@@ -74,17 +107,17 @@ func (cli *SyncClient) Serve() {
 func (cli *SyncClient) Stop() { cli.stop() }
 
 // peek top dirty key and data
-func (cli *SyncClient) peek() (string, xData, error) {
+func (cli *SyncClient) peek() (string, xRedisData, error) {
 	return cli.runScript(luaPeek, "", 0)
 }
 
 // clean dirty flag and make key volatile, then peek the next
-func (cli *SyncClient) next(key string, rev int64) (string, xData, error) {
+func (cli *SyncClient) next(key string, rev int64) (string, xRedisData, error) {
 	return cli.runScript(luaNext, key, rev)
 }
 
-func (cli *SyncClient) runScript(script *Script, key string, rev int64) (
-	_ string, data xData, err error) {
+func (cli *SyncClient) runScript(script *xScript, key string, rev int64) (
+	_ string, data xRedisData, err error) {
 	var (
 		keys []string
 		args []interface{}
@@ -107,12 +140,12 @@ func (cli *SyncClient) runScript(script *Script, key string, rev int64) (
 	return a[0].(string), data, nil
 }
 
-func (cli *SyncClient) save(key string, data xData) (err error) {
+func (cli *SyncClient) save(key string, data xRedisData) (err error) {
 	database, collection, _id := cli.opts.keyMappingStrategy.MapKey(key)
 	_, err = cli.mdb.Database(database).Collection(collection).UpdateOne(
 		context.Background(),
 		bson.M{"_id": _id},
-		bson.M{"$set": &xDataBytes{
+		bson.M{"$set": &xMongoData{
 			Rev: data.Rev,
 			Val: fastStringToBytes(data.Val),
 		}},

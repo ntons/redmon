@@ -9,14 +9,60 @@ import (
 	"go.mongodb.org/mongo-driver/mongo"
 )
 
-// redis client interface
-// maybe *redis.Client, *redis.ClusterClient etc.
-type RedisClient interface {
-	Eval(ctx context.Context, script string, keys []string, args ...interface{}) *redis.Cmd
-	EvalSha(ctx context.Context, sha1 string, keys []string, args ...interface{}) *redis.Cmd
-	ScriptExists(ctx context.Context, hashes ...string) *redis.BoolSliceCmd
-	ScriptLoad(ctx context.Context, script string) *redis.StringCmd
-}
+const (
+	xDirtySet = "$DIRTYSET$"
+	xDirtyQue = "$DIRTYQUE$"
+)
+
+var (
+	luaGet = newScript(`
+local b=redis.call("GET", KEYS[1])
+if not b then error("CACHE_MISS") end
+local d=cmsgpack.unpack(b)
+if d.rev==0 and ARGV[1] then
+  d.rev,d.val=d.rev+1,ARGV[1]
+  b=cmsgpack.pack(d)
+  redis.call("SET",KEYS[1],b)
+  if redis.call("SADD","` + xDirtySet + `",KEYS[1])>0 then
+    redis.call("LPUSH","` + xDirtyQue + `",KEYS[1])
+  end
+end
+return b
+`)
+
+	luaSet = newScript(`
+local b=redis.call("GET",KEYS[1])
+if not b then error("CACHE_MISS") end
+local d=cmsgpack.unpack(b)
+d.rev,d.val=d.rev+1,ARGV[1]
+redis.call("SET",KEYS[1],cmsgpack.pack(d))
+if redis.call("SADD","` + xDirtySet + `",KEYS[1])>0 then
+  redis.call("LPUSH","` + xDirtyQue + `",KEYS[1])
+end
+return d.rev
+`)
+
+	luaAdd = newScript(`
+local b=redis.call("GET",KEYS[1])
+if not b then error("CACHE_MISS") end
+local d=cmsgpack.unpack(b)
+if d.rev~=0 then return 0 end
+d.rev,d.val=d.rev+1,ARGV[1]
+redis.call("SET",KEYS[1],cmsgpack.pack(d))
+if redis.call("SADD","` + xDirtySet + `",KEYS[1])>0 then
+  redis.call("LPUSH","` + xDirtyQue + `",KEYS[1])
+end
+return 1
+`)
+
+	luaLoad = newScript(`
+local b=redis.call("GET",KEYS[1])
+if not b or cmsgpack.unpack(b).rev<cmsgpack.unpack(ARGV[1]).rev then
+  redis.call("SET",KEYS[1],ARGV[1],"EX",86400)
+end
+return 0
+`)
+)
 
 type Client interface {
 	// get stat info
@@ -36,13 +82,13 @@ type Client interface {
 	Add(ctx context.Context, key, val string) (err error)
 
 	// Eval execute a script on value, modified value will be saved automatically
-	// It's dangerous to eval untrusted script, so this method is only used to
-	// extend remon abilities
-	Eval(ctx context.Context, script *Script, key string, args ...interface{}) (cmd *redis.Cmd)
+	// It's dangerous to eval untrusted script
+	// This method is only used to extend remon abilities
+	eval(ctx context.Context, script *xScript, key string, args ...interface{}) (cmd *redis.Cmd)
 }
 
 // REDIS存储数据对象(cmsgpack不接受bin数据类型，只能用string)
-type xData struct {
+type xRedisData struct {
 	// 数据版本号，每次修改都会递增。
 	// lua的number是由double实现，一般情况下有52bits尾数位，因此最大支持
 	// 整数大约为4.5*10^15，我不觉得有哪些数据能达到千万亿级别的修改次数。
@@ -52,7 +98,7 @@ type xData struct {
 }
 
 // MONGO存储数据对象
-type xDataBytes struct {
+type xMongoData struct {
 	Rev int64  `msgpack:"rev" bson:"rev" json:"rev"`
 	Val []byte `msgpack:"val" bson:"val" json:"val"`
 }
@@ -112,8 +158,8 @@ func (cli *xClient) Add(ctx context.Context, key, val string) (err error) {
 	return
 }
 
-func (cli *xClient) Eval(
-	ctx context.Context, script *Script, key string, args ...interface{}) (
+func (cli *xClient) eval(
+	ctx context.Context, script *xScript, key string, args ...interface{}) (
 	cmd *redis.Cmd) {
 	if cmd = cli.runScript(ctx, script, key, args...); isCacheMiss(cmd.Err()) {
 		if err := cli.load(ctx, key); err != nil {
@@ -126,7 +172,7 @@ func (cli *xClient) Eval(
 
 // run script and deal errors and stats
 func (cli *xClient) runScript(
-	ctx context.Context, script *Script, key string, args ...interface{}) (
+	ctx context.Context, script *xScript, key string, args ...interface{}) (
 	cmd *redis.Cmd) {
 	cmd = script.Run(ctx, cli.rdb, []string{key}, args...)
 	if err := cmd.Err(); err != nil {
@@ -164,7 +210,7 @@ func (cli *xClient) get(
 	if err != nil {
 		return
 	}
-	var data xData
+	var data xRedisData
 	if err = msgpack.Unmarshal(fastStringToBytes(s), &data); err != nil {
 		cli.opts.log.Errorf("failed to unmarshal data: %v", err)
 		cli.stat.incrDataError()
@@ -196,7 +242,7 @@ func (cli *xClient) add(ctx context.Context, key, val string) error {
 // Cache only be updated when not exists or the loaded data is newer
 func (cli *xClient) load(ctx context.Context, key string) (err error) {
 	database, collection, _id := cli.opts.keyMappingStrategy.MapKey(key)
-	var data xDataBytes
+	var data xMongoData
 	if err = cli.mdb.Database(database).Collection(collection).FindOne(
 		ctx, bson.M{"_id": _id}).Decode(&data); err != nil {
 		if err != mongo.ErrNoDocuments {
@@ -207,7 +253,7 @@ func (cli *xClient) load(ctx context.Context, key string) (err error) {
 		err = nil
 	}
 	var buf []byte
-	if buf, err = msgpack.Marshal(&xData{
+	if buf, err = msgpack.Marshal(&xRedisData{
 		Rev: data.Rev,
 		Val: fastBytesToString(data.Val),
 	}); err != nil {
