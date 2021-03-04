@@ -18,12 +18,12 @@ func init() {
 	rand.Seed(time.Now().UnixNano())
 }
 
-func rGetData(ctx context.Context, r *redis.Client, key string) (d xData) {
+func rGetData(ctx context.Context, r *redis.Client, key string) (d xRedisData) {
 	b, _ := r.Get(ctx, key).Bytes()
 	msgpack.Unmarshal(b, &d)
 	return
 }
-func rSetData(ctx context.Context, r *redis.Client, key string, d xData) {
+func rSetData(ctx context.Context, r *redis.Client, key string, d xRedisData) {
 	b, _ := msgpack.Marshal(&d)
 	r.Set(ctx, key, fastBytesToString(b), 0)
 }
@@ -59,19 +59,19 @@ func TestReMonGet(t *testing.T) {
 		t.Fatalf("unexpected get err: %v", err)
 	}
 
-	rSetData(ctx, r, key, xData{Rev: 0, Val: ""})
+	rSetData(ctx, r, key, xRedisData{Rev: 0, Val: ""})
 	if _, _, err := cli.get(ctx, key); err != ErrNotFound {
 		t.Fatalf("unexpected get err: %v", err)
 	}
 
-	rSetData(ctx, r, key, xData{Rev: 1, Val: val})
+	rSetData(ctx, r, key, xRedisData{Rev: 1, Val: val})
 	if _, _val, err := cli.get(ctx, key); err != nil {
 		t.Fatalf("unexpected get err: %v", err)
 	} else if _val != val {
 		t.Fatalf("unexpected get val: %v", _val)
 	}
 
-	rSetData(ctx, r, key, xData{Rev: 0, Val: ""})
+	rSetData(ctx, r, key, xRedisData{Rev: 0, Val: ""})
 	if _, _val, err := cli.get(ctx, key, AddIfNotFound(val)); err != nil {
 		t.Fatalf("unexpected get err: %v", err)
 	} else if _val != val {
@@ -100,7 +100,7 @@ func TestReMonSet(t *testing.T) {
 		t.Fatalf("unexpected set err: %v", err)
 	}
 
-	var d = xData{Rev: 0}
+	var d = xRedisData{Rev: 0}
 	b, _ := msgpack.Marshal(&d)
 	r.Set(ctx, key, fastBytesToString(b), 0)
 	if _, err := cli.set(ctx, key, val); err != nil {
@@ -142,7 +142,7 @@ func TestReMonAdd(t *testing.T) {
 		t.Fatalf("unexpected add err: %v", err)
 	}
 
-	var d = xData{Rev: 0}
+	var d = xRedisData{Rev: 0}
 	b, _ := msgpack.Marshal(&d)
 	r.Set(ctx, key, fastBytesToString(b), 0)
 	if err := cli.add(ctx, key, val); err != nil {
@@ -202,8 +202,8 @@ func TestReMonEval(t *testing.T) {
 	var key, val = fmt.Sprintf("%d", rand.Int()), "hello"
 	defer r.Del(ctx, key)
 
-	rSetData(ctx, r, key, xData{Rev: 1, Val: val})
-	if s, err := cli.Eval(
+	rSetData(ctx, r, key, xRedisData{Rev: 1, Val: val})
+	if s, err := cli.eval(
 		ctx, newEvalScript(`return VALUE`), key,
 	).Text(); err != nil {
 		t.Fatalf("unexpected eval error: %v", err)
@@ -215,7 +215,7 @@ func TestReMonEval(t *testing.T) {
 		t.Fatalf("unexpected eval val: %v", d.Val)
 	}
 
-	if s, err := cli.Eval(
+	if s, err := cli.eval(
 		ctx, newEvalScript(`VALUE="foo";return VALUE`), key,
 	).Text(); err != nil {
 		t.Fatalf("unexpected eval error: %v", err)

@@ -11,9 +11,9 @@ import (
 	"github.com/vmihailenco/msgpack/v4"
 )
 
-func TestSyncPeekNext(t *testing.T) {
+func TestSyncerPeekNext(t *testing.T) {
 	r, m := dial(t)
-	s := NewSync(r, m)
+	s := NewSyncer(r, m)
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
@@ -25,7 +25,7 @@ func TestSyncPeekNext(t *testing.T) {
 		t.Fatalf("unexpected peek error: %v", err)
 	}
 
-	b, _ := msgpack.Marshal(xData{Rev: 1, Val: val})
+	b, _ := msgpack.Marshal(xRedisData{Rev: 1, Val: val})
 	r.Set(ctx, key, fastBytesToString(b), 0)
 	r.SAdd(ctx, xDirtySet, key)
 	r.LPush(ctx, xDirtyQue, key)

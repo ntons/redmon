@@ -46,7 +46,7 @@ end
 ` + luaPeek.src)
 )
 
-type SyncClient struct {
+type Syncer struct {
 	opts *xOptions
 	rdb  RedisClient
 	mdb  *mongo.Client
@@ -58,65 +58,62 @@ type SyncClient struct {
 	cond    *sync.Cond
 }
 
-func NewSyncClient(
-	rdb RedisClient, mdb *mongo.Client, opts ...Option) *SyncClient {
+func NewSyncer(
+	rdb RedisClient, mdb *mongo.Client, opts ...Option) *Syncer {
 	o := newOptions()
 	for _, opt := range opts {
 		opt.apply(o)
 	}
 	ctx, stop := context.WithCancel(context.Background())
-	return &SyncClient{opts: o, rdb: rdb, mdb: mdb, ctx: ctx, stop: stop}
-}
-func NewSync(rdb RedisClient, mdb *mongo.Client, opts ...Option) *SyncClient {
-	return NewSyncClient(rdb, mdb, opts...)
+	return &Syncer{opts: o, rdb: rdb, mdb: mdb, ctx: ctx, stop: stop}
 }
 
-func (cli *SyncClient) Serve() {
+func (syncer *Syncer) Serve() {
 	var tick *time.Ticker // rate limit beat generater
-	if cli.opts.syncRate > 0 {
-		tick = time.NewTicker(time.Second / time.Duration(cli.opts.syncRate))
+	if syncer.opts.syncRate > 0 {
+		tick = time.NewTicker(time.Second / time.Duration(syncer.opts.syncRate))
 		defer tick.Stop()
 	}
 	for {
-		key, data, err := cli.peek()
-		for ; err == nil; key, data, err = cli.next(key, data.Rev) {
-			if err = cli.save(key, data); err != nil {
+		key, data, err := syncer.peek()
+		for ; err == nil; key, data, err = syncer.next(key, data.Rev) {
+			if err = syncer.save(key, data); err != nil {
 				break
 			}
-			cli.opts.log.Debugf("sync: %s saved", key)
+			syncer.opts.log.Debugf("sync: %s saved", key)
 			if tick != nil {
 				select {
-				case <-cli.ctx.Done():
+				case <-syncer.ctx.Done():
 					return
 				case <-tick.C:
 				}
 			}
 		}
 		if err != redis.Nil {
-			cli.opts.log.Errorf("failed to sync: %v", err)
+			syncer.opts.log.Errorf("failed to sync: %v", err)
 		}
 		// no dirty data or other error, halt 1 second
 		select {
-		case <-cli.ctx.Done():
+		case <-syncer.ctx.Done():
 			return
 		case <-time.After(time.Second):
 		}
 	}
 }
 
-func (cli *SyncClient) Stop() { cli.stop() }
+func (syncer *Syncer) Stop() { syncer.stop() }
 
 // peek top dirty key and data
-func (cli *SyncClient) peek() (string, xRedisData, error) {
-	return cli.runScript(luaPeek, "", 0)
+func (syncer *Syncer) peek() (string, xRedisData, error) {
+	return syncer.runScript(luaPeek, "", 0)
 }
 
 // clean dirty flag and make key volatile, then peek the next
-func (cli *SyncClient) next(key string, rev int64) (string, xRedisData, error) {
-	return cli.runScript(luaNext, key, rev)
+func (syncer *Syncer) next(key string, rev int64) (string, xRedisData, error) {
+	return syncer.runScript(luaNext, key, rev)
 }
 
-func (cli *SyncClient) runScript(script *xScript, key string, rev int64) (
+func (syncer *Syncer) runScript(script *xScript, key string, rev int64) (
 	_ string, data xRedisData, err error) {
 	var (
 		keys []string
@@ -125,7 +122,7 @@ func (cli *SyncClient) runScript(script *xScript, key string, rev int64) (
 	if key != "" && rev > 0 {
 		keys, args = []string{key}, []interface{}{rev}
 	}
-	r, err := script.Run(cli.ctx, cli.rdb, keys, args...).Result()
+	r, err := script.Run(syncer.ctx, syncer.rdb, keys, args...).Result()
 	if err != nil {
 		return
 	}
@@ -140,9 +137,9 @@ func (cli *SyncClient) runScript(script *xScript, key string, rev int64) (
 	return a[0].(string), data, nil
 }
 
-func (cli *SyncClient) save(key string, data xRedisData) (err error) {
-	database, collection, _id := cli.opts.keyMappingStrategy.MapKey(key)
-	_, err = cli.mdb.Database(database).Collection(collection).UpdateOne(
+func (syncer *Syncer) save(key string, data xRedisData) (err error) {
+	database, collection, _id := syncer.opts.keyMappingStrategy.MapKey(key)
+	_, err = syncer.mdb.Database(database).Collection(collection).UpdateOne(
 		context.Background(),
 		bson.M{"_id": _id},
 		bson.M{"$set": &xMongoData{
