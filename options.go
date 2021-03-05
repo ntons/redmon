@@ -8,7 +8,7 @@ import (
 type KeyMapper func(string) (_, _, _ string)
 
 type OnSyncSaveFunc func(string) time.Duration
-type OnSyncErrorFunc func(string, error) time.Duration
+type OnSyncErrorFunc func(error) time.Duration
 type OnSyncIdleFunc func() time.Duration
 
 // Client/SyncClient xOptions
@@ -39,9 +39,9 @@ func (x *xOptions) OnSyncSave(key string) time.Duration {
 	}
 	return 0
 }
-func (x *xOptions) OnSyncError(key string, err error) time.Duration {
+func (x *xOptions) OnSyncError(err error) time.Duration {
 	if x.onSyncError != nil {
-		return x.onSyncError(key, err)
+		return x.onSyncError(err)
 	}
 	return time.Second
 }

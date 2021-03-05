@@ -18,7 +18,24 @@ const (
 )
 
 var (
-	luaPeek = newScript(`
+	luaSync = newScript(`
+assert(#KEYS<2 and #KEYS==#ARGV)
+if #KEYS>0 and redis.call("LINDEX","` + xDirtyQue + `",-1)==KEYS[1] then
+  local b=redis.call("GET",KEYS[1])
+  if not b then
+	redis.call("RPOP","` + xDirtyQue + `")
+	redis.call("SREM","` + xDirtySet + `",KEYS[1])
+  else
+	local d=cmsgpack.unpack(b)
+	if tostring(d.rev)==ARGV[1] then
+	  redis.call("RPOP","` + xDirtyQue + `")
+	  redis.call("SREM","` + xDirtySet + `",KEYS[1])
+	  redis.call("EXPIRE",KEYS[1],86400)
+	else
+	  redis.call("RPOPLPUSH","` + xDirtyQue + `","` + xDirtyQue + `")
+	end
+  end
+end
 local k=redis.call("LINDEX","` + xDirtyQue + `",-1)
 if not k then return end
 local b=redis.call("GET",k)
@@ -29,25 +46,6 @@ if not b then
 end
 return {k,b}
 `)
-
-	luaNext = newScript(`
-if redis.call("LINDEX","` + xDirtyQue + `",-1)==KEYS[1] then
-  local b=redis.call("GET",KEYS[1])
-  if not b then
-    redis.call("RPOP","` + xDirtyQue + `")
-    redis.call("SREM","` + xDirtySet + `",KEYS[1])
-  else
-    local d=cmsgpack.unpack(b)
-    if tostring(d.rev)==ARGV[1] then
-      redis.call("RPOP","` + xDirtyQue + `")
-      redis.call("SREM","` + xDirtySet + `",KEYS[1])
-      redis.call("EXPIRE",KEYS[1],86400)
-    else
-      redis.call("RPOPLPUSH","` + xDirtyQue + `","` + xDirtyQue + `")
-    end
-  end
-end
-` + luaPeek.src)
 )
 
 type Syncer struct {
@@ -59,8 +57,7 @@ type Syncer struct {
 	stop context.CancelFunc
 }
 
-func NewSyncer(
-	rdb RedisClient, mdb *mongo.Client, opts ...Option) *Syncer {
+func NewSyncer(rdb RedisClient, mdb *mongo.Client, opts ...Option) *Syncer {
 	o := &xOptions{}
 	for _, opt := range opts {
 		opt.apply(o)
@@ -69,18 +66,20 @@ func NewSyncer(
 	return &Syncer{xOptions: o, rdb: rdb, mdb: mdb, ctx: ctx, stop: stop}
 }
 
-func (syncer *Syncer) Serve() {
+func (s *Syncer) Serve() {
 	var t *time.Timer
 	for {
-		key, data, err := syncer.peek()
-		for ; err == nil; key, data, err = syncer.next(key, data.Rev) {
+		for k, d, err := s.peek(); ; k, d, err = s.next(k, d.Rev) {
+			if err == nil {
+				err = s.save(k, d)
+			}
 			var backoff time.Duration
-			if err = syncer.save(key, data); err == nil {
-				backoff = syncer.OnSyncSave(key)
+			if err == nil {
+				backoff = s.OnSyncSave(k)
 			} else if err == redis.Nil {
-				backoff = syncer.OnSyncIdle()
+				backoff = s.OnSyncIdle()
 			} else {
-				backoff = syncer.OnSyncError(key, err)
+				backoff = s.OnSyncError(err)
 			}
 			if backoff > 0 {
 				if t == nil {
@@ -90,57 +89,48 @@ func (syncer *Syncer) Serve() {
 					t.Reset(backoff)
 				}
 				select {
-				case <-syncer.ctx.Done():
+				case <-s.ctx.Done():
 					return
 				case <-t.C:
 				}
 			}
 			if err != nil {
-				break // no matter error or idle, break to re-peek
+				break
 			}
 		}
 	}
 }
 
-func (syncer *Syncer) Stop() { syncer.stop() }
+func (s *Syncer) Stop() { s.stop() }
 
 // peek top dirty key and data
-func (syncer *Syncer) peek() (string, xRedisData, error) {
-	return syncer.runScript(luaPeek, "", 0)
+func (s *Syncer) peek() (string, xRedisData, error) {
+	return s.resolve(luaSync.Run(s.ctx, s.rdb, []string{}))
 }
 
 // clean dirty flag and make key volatile, then peek the next
-func (syncer *Syncer) next(key string, rev int64) (string, xRedisData, error) {
-	return syncer.runScript(luaNext, key, rev)
+func (s *Syncer) next(key string, rev int64) (string, xRedisData, error) {
+	return s.resolve(luaSync.Run(s.ctx, s.rdb, []string{key}, rev))
 }
 
-func (syncer *Syncer) runScript(script *xScript, key string, rev int64) (
-	_ string, data xRedisData, err error) {
-	var (
-		keys []string
-		args []interface{}
-	)
-	if key != "" && rev > 0 {
-		keys, args = []string{key}, []interface{}{rev}
-	}
-	r, err := script.Run(syncer.ctx, syncer.rdb, keys, args...).Result()
-	if err != nil {
+func (*Syncer) resolve(
+	r *redis.Cmd) (_ string, data xRedisData, err error) {
+	var v interface{}
+	if v, err = r.Result(); err != nil {
 		return
-	}
-	a, ok := r.([]interface{})
-	if !ok || len(a) != 2 {
+	} else if a, ok := v.([]interface{}); !ok || len(a) != 2 {
 		panic(fmt.Errorf("unexpected return type: %T", r))
-	}
-	if err = msgpack.Unmarshal(
+	} else if err = msgpack.Unmarshal(
 		fastStringToBytes(a[1].(string)), &data); err != nil {
 		return
+	} else {
+		return a[0].(string), data, nil
 	}
-	return a[0].(string), data, nil
 }
 
-func (syncer *Syncer) save(key string, data xRedisData) (err error) {
-	database, collection, _id := syncer.MapKey(key)
-	_, err = syncer.mdb.Database(database).Collection(collection).UpdateOne(
+func (s *Syncer) save(key string, data xRedisData) (err error) {
+	database, collection, _id := s.MapKey(key)
+	_, err = s.mdb.Database(database).Collection(collection).UpdateOne(
 		context.Background(),
 		bson.M{"_id": _id},
 		bson.M{"$set": &xMongoData{
