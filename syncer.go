@@ -3,7 +3,6 @@ package remon
 import (
 	"context"
 	"fmt"
-	"sync"
 	"time"
 
 	"github.com/go-redis/redis/v8"
@@ -11,6 +10,11 @@ import (
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/mongo"
 	"go.mongodb.org/mongo-driver/mongo/options"
+)
+
+const (
+	xDirtySet = "$DIRTYSET$"
+	xDirtyQue = "$DIRTYQUE$"
 )
 
 var (
@@ -47,56 +51,53 @@ end
 )
 
 type Syncer struct {
-	opts *xOptions
-	rdb  RedisClient
-	mdb  *mongo.Client
+	*xOptions
+	rdb RedisClient
+	mdb *mongo.Client
 	// life-time control
 	ctx  context.Context
 	stop context.CancelFunc
-	// rate limit
-	counter int32
-	cond    *sync.Cond
 }
 
 func NewSyncer(
 	rdb RedisClient, mdb *mongo.Client, opts ...Option) *Syncer {
-	o := newOptions()
+	o := &xOptions{}
 	for _, opt := range opts {
 		opt.apply(o)
 	}
 	ctx, stop := context.WithCancel(context.Background())
-	return &Syncer{opts: o, rdb: rdb, mdb: mdb, ctx: ctx, stop: stop}
+	return &Syncer{xOptions: o, rdb: rdb, mdb: mdb, ctx: ctx, stop: stop}
 }
 
 func (syncer *Syncer) Serve() {
-	var tick *time.Ticker // rate limit beat generater
-	if syncer.opts.syncRate > 0 {
-		tick = time.NewTicker(time.Second / time.Duration(syncer.opts.syncRate))
-		defer tick.Stop()
-	}
+	var t *time.Timer
 	for {
 		key, data, err := syncer.peek()
 		for ; err == nil; key, data, err = syncer.next(key, data.Rev) {
-			if err = syncer.save(key, data); err != nil {
-				break
+			var backoff time.Duration
+			if err = syncer.save(key, data); err == nil {
+				backoff = syncer.OnSyncSave(key)
+			} else if err == redis.Nil {
+				backoff = syncer.OnSyncIdle()
+			} else {
+				backoff = syncer.OnSyncError(key, err)
 			}
-			syncer.opts.log.Debugf("sync: %s saved", key)
-			if tick != nil {
+			if backoff > 0 {
+				if t == nil {
+					t = time.NewTimer(backoff)
+					defer t.Stop()
+				} else {
+					t.Reset(backoff)
+				}
 				select {
 				case <-syncer.ctx.Done():
 					return
-				case <-tick.C:
+				case <-t.C:
 				}
 			}
-		}
-		if err != redis.Nil {
-			syncer.opts.log.Errorf("failed to sync: %v", err)
-		}
-		// no dirty data or other error, halt 1 second
-		select {
-		case <-syncer.ctx.Done():
-			return
-		case <-time.After(time.Second):
+			if err != nil {
+				break // no matter error or idle, break to re-peek
+			}
 		}
 	}
 }
@@ -138,7 +139,7 @@ func (syncer *Syncer) runScript(script *xScript, key string, rev int64) (
 }
 
 func (syncer *Syncer) save(key string, data xRedisData) (err error) {
-	database, collection, _id := syncer.opts.keyMappingStrategy.MapKey(key)
+	database, collection, _id := syncer.MapKey(key)
 	_, err = syncer.mdb.Database(database).Collection(collection).UpdateOne(
 		context.Background(),
 		bson.M{"_id": _id},

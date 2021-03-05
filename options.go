@@ -2,26 +2,27 @@ package remon
 
 import (
 	"strings"
-
-	log "github.com/ntons/log-go"
+	"time"
 )
 
-// map redis key to mongodb (database,collection,_id)
-type KeyMappingStrategy interface {
-	MapKey(string) (_, _, _ string)
+type KeyMapper func(string) (_, _, _ string)
+
+type OnSyncSaveFunc func(string) time.Duration
+type OnSyncErrorFunc func(string, error) time.Duration
+type OnSyncIdleFunc func() time.Duration
+
+// Client/SyncClient xOptions
+type xOptions struct {
+	keyMapper   KeyMapper
+	onSyncSave  OnSyncSaveFunc
+	onSyncError OnSyncErrorFunc
+	onSyncIdle  OnSyncIdleFunc
 }
 
-type xFuncKeyMappingStrategy struct {
-	f func(string) (_, _, _ string)
-}
-
-func (f xFuncKeyMappingStrategy) MapKey(key string) (_, _, _ string) {
-	return f.f(key)
-}
-
-type xDefaultKeyMappingStrategy struct{}
-
-func (xDefaultKeyMappingStrategy) MapKey(key string) (_, _, _ string) {
+func (x *xOptions) MapKey(key string) (_, _, _ string) {
+	if x.keyMapper != nil {
+		return x.keyMapper(key)
+	}
 	a := strings.SplitN(key, ":", 3)
 	switch len(a) {
 	case 3:
@@ -32,25 +33,23 @@ func (xDefaultKeyMappingStrategy) MapKey(key string) (_, _, _ string) {
 		return "remon", "data", key
 	}
 }
-
-var defaultKeyMappingStrategy = xDefaultKeyMappingStrategy{}
-
-// Client/SyncClient xOptions
-type xOptions struct {
-	// map redis key to mongodb (database,collection,_id)
-	keyMappingStrategy KeyMappingStrategy
-	/// for sync only
-	// sync limit count per second, 0 means unlimited
-	syncRate int
-	// logger
-	log log.Recorder
-}
-
-func newOptions() *xOptions {
-	return &xOptions{
-		keyMappingStrategy: defaultKeyMappingStrategy,
-		log:                log.Nop{},
+func (x *xOptions) OnSyncSave(key string) time.Duration {
+	if x.onSyncSave != nil {
+		return x.onSyncSave(key)
 	}
+	return 0
+}
+func (x *xOptions) OnSyncError(key string, err error) time.Duration {
+	if x.onSyncError != nil {
+		return x.onSyncError(key, err)
+	}
+	return time.Second
+}
+func (x xOptions) OnSyncIdle() time.Duration {
+	if x.onSyncIdle != nil {
+		return x.onSyncIdle()
+	}
+	return time.Second
 }
 
 type Option interface {
@@ -58,30 +57,24 @@ type Option interface {
 }
 
 type xFuncOption struct {
-	f func(o *xOptions)
+	fn func(o *xOptions)
 }
 
-func (f xFuncOption) apply(o *xOptions) {
-	f.f(o)
+func (x xFuncOption) apply(o *xOptions) {
+	x.fn(o)
 }
 
-func WithKeyMappingStrategy(v KeyMappingStrategy) Option {
-	return xFuncOption{func(o *xOptions) {
-		o.keyMappingStrategy = v
-	}}
+func WithKeyMapper(fn KeyMapper) Option {
+	return xFuncOption{func(o *xOptions) { o.keyMapper = fn }}
 }
-func WithKeyMappingStrategyFunc(v func(string) (_, _, _ string)) Option {
-	return xFuncOption{func(o *xOptions) {
-		o.keyMappingStrategy = xFuncKeyMappingStrategy{v}
-	}}
+func OnSyncSave(fn OnSyncSaveFunc) Option {
+	return xFuncOption{func(o *xOptions) { o.onSyncSave = fn }}
 }
-
-func WithSyncRate(rate int) Option {
-	return xFuncOption{func(o *xOptions) { o.syncRate = rate }}
+func OnSyncError(fn OnSyncErrorFunc) Option {
+	return xFuncOption{func(o *xOptions) { o.onSyncError = fn }}
 }
-
-func WithLogger(logger log.Recorder) Option {
-	return xFuncOption{func(o *xOptions) { o.log = logger }}
+func OnSyncIdle(fn OnSyncIdleFunc) Option {
+	return xFuncOption{func(o *xOptions) { o.onSyncIdle = fn }}
 }
 
 // get method xOptions

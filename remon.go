@@ -9,11 +9,6 @@ import (
 	"go.mongodb.org/mongo-driver/mongo"
 )
 
-const (
-	xDirtySet = "$DIRTYSET$"
-	xDirtyQue = "$DIRTYQUE$"
-)
-
 var (
 	luaGet = newScript(`
 local b=redis.call("GET", KEYS[1])
@@ -106,18 +101,18 @@ type xMongoData struct {
 var _ Client = (*xClient)(nil)
 
 type xClient struct {
-	opts *xOptions
+	*xOptions
 	rdb  RedisClient
 	mdb  *mongo.Client
 	stat Stat
 }
 
 func NewClient(rdb RedisClient, mdb *mongo.Client, opts ...Option) Client {
-	o := newOptions()
+	o := &xOptions{}
 	for _, opt := range opts {
 		opt.apply(o)
 	}
-	return &xClient{opts: o, rdb: rdb, mdb: mdb}
+	return &xClient{xOptions: o, rdb: rdb, mdb: mdb}
 }
 func New(rdb RedisClient, mdb *mongo.Client, opts ...Option) Client {
 	return NewClient(rdb, mdb, opts...)
@@ -212,7 +207,6 @@ func (cli *xClient) get(
 	}
 	var data xRedisData
 	if err = msgpack.Unmarshal(fastStringToBytes(s), &data); err != nil {
-		cli.opts.log.Errorf("failed to unmarshal data: %v", err)
 		cli.stat.incrDataError()
 		return
 	}
@@ -241,12 +235,11 @@ func (cli *xClient) add(ctx context.Context, key, val string) error {
 // Load data from database to cache
 // Cache only be updated when not exists or the loaded data is newer
 func (cli *xClient) load(ctx context.Context, key string) (err error) {
-	database, collection, _id := cli.opts.keyMappingStrategy.MapKey(key)
+	database, collection, _id := cli.MapKey(key)
 	var data xMongoData
 	if err = cli.mdb.Database(database).Collection(collection).FindOne(
 		ctx, bson.M{"_id": _id}).Decode(&data); err != nil {
 		if err != mongo.ErrNoDocuments {
-			cli.opts.log.Errorf("failed to load data from mongo: %v", err)
 			cli.stat.incrMongoError()
 			return
 		}
@@ -257,7 +250,6 @@ func (cli *xClient) load(ctx context.Context, key string) (err error) {
 		Rev: data.Rev,
 		Val: fastBytesToString(data.Val),
 	}); err != nil {
-		cli.opts.log.Errorf("failed to marshal data: %v", err)
 		cli.stat.incrDataError()
 		return
 	}
