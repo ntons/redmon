@@ -61,7 +61,7 @@ return 0
 
 type Client interface {
 	// get stat info
-	Stat() *Stat
+	Metrics() *Metrics
 
 	// Get value from remon
 	// If cache miss, load from database
@@ -102,9 +102,9 @@ var _ Client = (*xClient)(nil)
 
 type xClient struct {
 	*xOptions
-	rdb  RedisClient
-	mdb  *mongo.Client
-	stat Stat
+	rdb     RedisClient
+	mdb     *mongo.Client
+	metrics Metrics
 }
 
 func NewClient(rdb RedisClient, mdb *mongo.Client, opts ...Option) Client {
@@ -118,7 +118,7 @@ func New(rdb RedisClient, mdb *mongo.Client, opts ...Option) Client {
 	return NewClient(rdb, mdb, opts...)
 }
 
-func (cli *xClient) Stat() *Stat { return &cli.stat }
+func (cli *xClient) Metrics() *Metrics { return &cli.metrics }
 
 func (cli *xClient) Get(
 	ctx context.Context, key string, opts ...GetOption) (
@@ -179,12 +179,12 @@ func (cli *xClient) runScript(
 	}
 	if err := cmd.Err(); err != nil {
 		if isCacheMiss(err) {
-			cli.stat.incrCacheMiss()
+			cli.metrics.incrCacheMiss()
 		} else {
-			cli.stat.incrRedisError()
+			cli.metrics.incrRedisError()
 		}
 	} else {
-		cli.stat.incrCacheHit()
+		cli.metrics.incrCacheHit()
 	}
 	return
 }
@@ -207,7 +207,7 @@ func (cli *xClient) get(
 	}
 	var data xRedisData
 	if err = msgpack.Unmarshal(fastStringToBytes(s), &data); err != nil {
-		cli.stat.incrDataError()
+		cli.metrics.incrDataError()
 		return
 	}
 	if data.Rev == 0 {
@@ -240,7 +240,7 @@ func (cli *xClient) load(ctx context.Context, key string) (err error) {
 	if err = cli.mdb.Database(database).Collection(collection).FindOne(
 		ctx, bson.M{"_id": _id}).Decode(&data); err != nil {
 		if err != mongo.ErrNoDocuments {
-			cli.stat.incrMongoError()
+			cli.metrics.incrMongoError()
 			return
 		}
 		err = nil
@@ -250,7 +250,7 @@ func (cli *xClient) load(ctx context.Context, key string) (err error) {
 		Rev: data.Rev,
 		Val: fastBytesToString(data.Val),
 	}); err != nil {
-		cli.stat.incrDataError()
+		cli.metrics.incrDataError()
 		return
 	}
 	if err = cli.runScript(
