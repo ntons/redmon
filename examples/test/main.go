@@ -101,24 +101,42 @@ func main() {
 					return
 				default:
 				}
-				i := RandIndex()
-				localDataMutex[i].Lock()
-				d := localData[i]
-				v := RandPayload()
-				_ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-				defer cancel()
-				rev, err := db.Set(_ctx, fmt.Sprintf("%d", i), v)
-				if err != nil {
-					fmt.Printf("failed to set data %d: %s\n", i, err)
-					localDataMutex[i].Unlock()
-					continue
-				}
-				d.Rev = rev
-				d.Payload = v
-				localDataMutex[i].Unlock()
-				if n := atomic.AddInt64(&counter, 1); n%1000000 == 0 {
-					fmt.Printf("count: %d\n", n)
-				}
+				func() {
+					i := RandIndex()
+					localDataMutex[i].Lock()
+					defer localDataMutex[i].Unlock()
+
+					d := localData[i]
+
+					_ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+					defer cancel()
+
+					if rev, val, err := db.Get(_ctx, fmt.Sprintf("%d", i)); err != nil {
+						if err != remon.ErrNotFound {
+							fmt.Printf("failed to get data %d: %s\n", i, err)
+							return
+						}
+						if d.Payload != "" {
+							fmt.Printf("unexpected not found error %d\n", i)
+							return
+						}
+					} else if val != d.Payload || rev != d.Rev {
+						fmt.Printf("data mismatch: %d, %d, %d, %d, %d\n", i, rev, d.Rev, len(val), len(d.Payload))
+						return
+					}
+
+					v := RandPayload()
+					rev, err := db.Set(_ctx, fmt.Sprintf("%d", i), v)
+					if err != nil {
+						fmt.Printf("failed to set data %d: %s\n", i, err)
+						return
+					}
+					d.Rev = rev
+					d.Payload = v
+					if n := atomic.AddInt64(&counter, 1); n%1000000 == 0 {
+						fmt.Printf("count: %d\n", n)
+					}
+				}()
 			}
 		}()
 	}
