@@ -110,7 +110,7 @@ var _ MailClient = (*xMailClient)(nil)
 
 type xMailClient struct{ rm Client }
 
-func NewMailClient(rm Client) *xMailClient {
+func NewMailClient(rm Client) MailClient {
 	return &xMailClient{rm: rm}
 }
 
@@ -150,7 +150,7 @@ func (cli xMailClient) Pull(
 	if len(ids) == 0 {
 		return
 	}
-	sort.Sort(Int64Slice(ids)) // ARGV must be sorted
+	sort.Sort(xInt64Slice(ids)) // ARGV must be sorted
 	args := make([]interface{}, 0, len(ids))
 	for _, id := range ids {
 		args = append(args, id)

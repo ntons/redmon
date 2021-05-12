@@ -5,24 +5,31 @@ import (
 	"time"
 )
 
-type KeyMapper func(string) (_, _, _ string)
+// Redis(key) -> Mongo(db,collection,_id)
+type MapKeyFunc func(key string) (db, collection, _id string)
 
-type OnSyncSaveFunc func(string) time.Duration
-type OnSyncErrorFunc func(error) time.Duration
+// 同步成功回调函数
+type OnSyncSaveFunc func(key string) time.Duration
+
+// 同步失败回调函数
+type OnSyncErrorFunc func(err error) time.Duration
+
+// 同步空闲回调函数
 type OnSyncIdleFunc func() time.Duration
 
 // Client/SyncClient xOptions
 type xOptions struct {
-	keyMapper   KeyMapper
-	onSyncSave  OnSyncSaveFunc
-	onSyncError OnSyncErrorFunc
-	onSyncIdle  OnSyncIdleFunc
+	mapKeyFunc      MapKeyFunc
+	onSyncSaveFunc  OnSyncSaveFunc
+	onSyncErrorFunc OnSyncErrorFunc
+	onSyncIdleFunc  OnSyncIdleFunc
 }
 
-func (x *xOptions) MapKey(key string) (_, _, _ string) {
-	if x.keyMapper != nil {
-		return x.keyMapper(key)
+func (x *xOptions) mapKey(key string) (_, _, _ string) {
+	if x.mapKeyFunc != nil {
+		return x.mapKeyFunc(key)
 	}
+	// default policy
 	a := strings.SplitN(key, ":", 3)
 	switch len(a) {
 	case 3:
@@ -33,21 +40,21 @@ func (x *xOptions) MapKey(key string) (_, _, _ string) {
 		return "remon", "data", key
 	}
 }
-func (x *xOptions) OnSyncSave(key string) time.Duration {
-	if x.onSyncSave != nil {
-		return x.onSyncSave(key)
+func (x *xOptions) onSyncSave(key string) time.Duration {
+	if x.onSyncSaveFunc != nil {
+		return x.onSyncSaveFunc(key)
 	}
 	return 0
 }
-func (x *xOptions) OnSyncError(err error) time.Duration {
-	if x.onSyncError != nil {
-		return x.onSyncError(err)
+func (x *xOptions) onSyncError(err error) time.Duration {
+	if x.onSyncErrorFunc != nil {
+		return x.onSyncErrorFunc(err)
 	}
 	return time.Second
 }
-func (x xOptions) OnSyncIdle() time.Duration {
-	if x.onSyncIdle != nil {
-		return x.onSyncIdle()
+func (x xOptions) onSyncIdle() time.Duration {
+	if x.onSyncIdleFunc != nil {
+		return x.onSyncIdleFunc()
 	}
 	return time.Second
 }
@@ -57,24 +64,22 @@ type Option interface {
 }
 
 type xFuncOption struct {
-	fn func(o *xOptions)
+	f func(o *xOptions)
 }
 
-func (x xFuncOption) apply(o *xOptions) {
-	x.fn(o)
-}
+func (x xFuncOption) apply(o *xOptions) { x.f(o) }
 
-func WithKeyMapper(fn KeyMapper) Option {
-	return xFuncOption{func(o *xOptions) { o.keyMapper = fn }}
+func WithKeyMap(f MapKeyFunc) Option {
+	return xFuncOption{func(o *xOptions) { o.mapKeyFunc = f }}
 }
-func OnSyncSave(fn OnSyncSaveFunc) Option {
-	return xFuncOption{func(o *xOptions) { o.onSyncSave = fn }}
+func OnSyncSave(f OnSyncSaveFunc) Option {
+	return xFuncOption{func(o *xOptions) { o.onSyncSaveFunc = f }}
 }
-func OnSyncError(fn OnSyncErrorFunc) Option {
-	return xFuncOption{func(o *xOptions) { o.onSyncError = fn }}
+func OnSyncError(f OnSyncErrorFunc) Option {
+	return xFuncOption{func(o *xOptions) { o.onSyncErrorFunc = f }}
 }
-func OnSyncIdle(fn OnSyncIdleFunc) Option {
-	return xFuncOption{func(o *xOptions) { o.onSyncIdle = fn }}
+func OnSyncIdle(f OnSyncIdleFunc) Option {
+	return xFuncOption{func(o *xOptions) { o.onSyncIdleFunc = f }}
 }
 
 // get method xOptions

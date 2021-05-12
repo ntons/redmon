@@ -75,11 +75,11 @@ func (s *Syncer) Serve() {
 			}
 			var backoff time.Duration
 			if err == nil {
-				backoff = s.OnSyncSave(k)
+				backoff = s.onSyncSave(k)
 			} else if err == redis.Nil {
-				backoff = s.OnSyncIdle()
+				backoff = s.onSyncIdle()
 			} else {
-				backoff = s.OnSyncError(err)
+				backoff = s.onSyncError(err)
 			}
 			if backoff > 0 {
 				if t == nil {
@@ -129,7 +129,7 @@ func (*Syncer) resolve(
 }
 
 func (s *Syncer) save(key string, data xRedisData) (err error) {
-	database, collection, _id := s.MapKey(key)
+	database, collection, _id := s.mapKey(key)
 	_, err = s.mdb.Database(database).Collection(collection).UpdateOne(
 		context.Background(),
 		bson.M{"_id": _id},

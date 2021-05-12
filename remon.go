@@ -174,7 +174,7 @@ func (cli *xClient) runScript(
 		if err == redis.Nil {
 			cmd.SetErr(nil) // not regard redis.Nil as error
 		} else if isCacheMiss(err) {
-			cmd.SetErr(errCacheMiss)
+			cmd.SetErr(xErrCacheMiss)
 		}
 	}
 	if err := cmd.Err(); err != nil {
@@ -235,7 +235,7 @@ func (cli *xClient) add(ctx context.Context, key, val string) error {
 // Load data from database to cache
 // Cache only be updated when not exists or the loaded data is newer
 func (cli *xClient) load(ctx context.Context, key string) (err error) {
-	database, collection, _id := cli.MapKey(key)
+	database, collection, _id := cli.mapKey(key)
 	var data xMongoData
 	if err = cli.mdb.Database(database).Collection(collection).FindOne(
 		ctx, bson.M{"_id": _id}).Decode(&data); err != nil {
