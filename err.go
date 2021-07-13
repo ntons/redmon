@@ -6,9 +6,9 @@ import (
 )
 
 var (
-	ErrAlreadyExists = errors.New("already exists")
-	ErrNotFound      = errors.New("not found")
-	ErrMailFull      = errors.New("mail full")
+	ErrAlreadyExists = errors.New("remon: already exists")
+	ErrNotFound      = errors.New("remon: not found")
+	ErrMailFull      = errors.New("remon: mail full")
 	// internal errors
 	xErrCacheMiss = errors.New("cache miss")
 )
