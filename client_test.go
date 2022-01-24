@@ -45,7 +45,7 @@ func dial(t *testing.T) (*redis.Client, *mongo.Client) {
 	return r, m
 }
 
-func TestReMonGet(t *testing.T) {
+func TestClientGet(t *testing.T) {
 	r, m := dial(t)
 	cli := New(r, m).(*xClient)
 
@@ -86,7 +86,7 @@ func TestReMonGet(t *testing.T) {
 	}
 }
 
-func TestReMonSet(t *testing.T) {
+func TestClientSet(t *testing.T) {
 	r, m := dial(t)
 	cli := New(r, m).(*xClient)
 
@@ -128,7 +128,7 @@ func TestReMonSet(t *testing.T) {
 	}
 }
 
-func TestReMonAdd(t *testing.T) {
+func TestClientAdd(t *testing.T) {
 	r, m := dial(t)
 	cli := New(r, m).(*xClient)
 
@@ -153,7 +153,7 @@ func TestReMonAdd(t *testing.T) {
 	}
 }
 
-func TestReMonLoad(t *testing.T) {
+func TestClientLoad(t *testing.T) {
 	r, m := dial(t)
 	cli := New(r, m).(*xClient)
 
@@ -192,7 +192,7 @@ func TestReMonLoad(t *testing.T) {
 	}
 }
 
-func TestReMonEval(t *testing.T) {
+func TestClientEval(t *testing.T) {
 	r, m := dial(t)
 	cli := New(r, m)
 
@@ -204,7 +204,7 @@ func TestReMonEval(t *testing.T) {
 
 	rSetData(ctx, r, key, xRedisData{Rev: 1, Val: val})
 	if s, err := cli.eval(
-		ctx, newEvalScript(`return VALUE`), key,
+		ctx, newSandboxScript(`return VALUE`), key,
 	).Text(); err != nil {
 		t.Fatalf("unexpected eval error: %v", err)
 	} else if s != val {
@@ -216,7 +216,7 @@ func TestReMonEval(t *testing.T) {
 	}
 
 	if s, err := cli.eval(
-		ctx, newEvalScript(`VALUE="foo";return VALUE`), key,
+		ctx, newSandboxScript(`VALUE="foo";return VALUE`), key,
 	).Text(); err != nil {
 		t.Fatalf("unexpected eval error: %v", err)
 	} else if s != "foo" {

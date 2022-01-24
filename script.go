@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha1"
 	"encoding/hex"
+	"fmt"
 	"io"
 	"strings"
 	"sync"
@@ -28,10 +29,15 @@ func newScript(src string) *xScript {
 	return &xScript{src: src, hash: hex.EncodeToString(h.Sum(nil))}
 }
 
+func newScriptFormat(pat string, args ...interface{}) *xScript {
+	return newScript(fmt.Sprintf(pat, args...))
+}
+
+func newScriptReplace(src string, oldnew ...string) *xScript {
+	return newScript(strings.NewReplacer(oldnew...).Replace(src))
+}
+
 func (script *xScript) Run(ctx context.Context, cli RedisClient, keys []string, args ...interface{}) (r *redis.Cmd) {
-	isNoScript := func(err error) bool {
-		return err != nil && strings.HasPrefix(err.Error(), "NOSCRIPT ")
-	}
 	if r = cli.EvalSha(ctx, script.hash, keys, args...); !isNoScript(r.Err()) {
 		return
 	}

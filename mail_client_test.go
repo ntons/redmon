@@ -8,7 +8,7 @@ import (
 	"time"
 )
 
-func TestMail(t *testing.T) {
+func TestMailClient(t *testing.T) {
 	r, m := dial(t)
 	cli := NewMailClient(New(r, m))
 

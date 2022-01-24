@@ -18,34 +18,34 @@ const (
 )
 
 var (
-	luaSync = newScript(`
-assert(#KEYS<2 and #KEYS==#ARGV)
-if #KEYS>0 and redis.call("LINDEX","` + xDirtyQue + `",-1)==KEYS[1] then
-  local b=redis.call("GET",KEYS[1])
+	luaSync = newScriptReplace(`
+assert(#KEYS < 2 and #KEYS == #ARGV)
+if #KEYS > 0 and redis.call("LINDEX", "{{DIRTYQUE}}", -1) == KEYS[1] then
+  local b = redis.call("GET", KEYS[1])
   if not b then
-	redis.call("RPOP","` + xDirtyQue + `")
-	redis.call("SREM","` + xDirtySet + `",KEYS[1])
+	redis.call("RPOP", "{{DIRTYQUE}}")
+	redis.call("SREM", "{{DIRTYSET}}", KEYS[1])
   else
-	local d=cmsgpack.unpack(b)
-	if tostring(d.rev)==ARGV[1] then
-	  redis.call("RPOP","` + xDirtyQue + `")
-	  redis.call("SREM","` + xDirtySet + `",KEYS[1])
-	  redis.call("EXPIRE",KEYS[1],86400)
+	local d = cmsgpack.unpack(b)
+	if tostring(d.rev) == ARGV[1] then
+	  redis.call("RPOP", "{{DIRTYQUE}}")
+	  redis.call("SREM", "{{DIRTYSET}}", KEYS[1])
+	  redis.call("EXPIRE", KEYS[1], 86400)
 	else
-	  redis.call("RPOPLPUSH","` + xDirtyQue + `","` + xDirtyQue + `")
+	  redis.call("RPOPLPUSH", "{{DIRTYQUE}}", "{{DIRTYQUE}}")
 	end
   end
 end
-local k=redis.call("LINDEX","` + xDirtyQue + `",-1)
+local k = redis.call("LINDEX", "{{DIRTYQUE}}", -1)
 if not k then return end
-local b=redis.call("GET",k)
+local b = redis.call("GET", k)
 if not b then
-  redis.call("RPOP","` + xDirtyQue + `")
-  redis.call("SREM","` + xDirtySet + `",k)
+  redis.call("RPOP", "{{DIRTYQUE}}")
+  redis.call("SREM", "{{DIRTYSET}}", k)
   return
 end
 return {k,b}
-`)
+`, `{{DIRTYSET}}`, xDirtySet, `{{DIRTYQUE}}`, xDirtyQue)
 )
 
 type Syncer struct {
@@ -120,8 +120,7 @@ func (*Syncer) resolve(
 		return
 	} else if a, ok := v.([]interface{}); !ok || len(a) != 2 {
 		panic(fmt.Errorf("unexpected return type: %T", r))
-	} else if err = msgpack.Unmarshal(
-		fastStringToBytes(a[1].(string)), &data); err != nil {
+	} else if err = msgpack.Unmarshal(s2b(a[1].(string)), &data); err != nil {
 		return
 	} else {
 		return a[0].(string), data, nil
@@ -135,7 +134,7 @@ func (s *Syncer) save(key string, data xRedisData) (err error) {
 		bson.M{"_id": _id},
 		bson.M{"$set": &xMongoData{
 			Rev: data.Rev,
-			Val: fastStringToBytes(data.Val),
+			Val: s2b(data.Val),
 		}},
 		options.Update().SetUpsert(true),
 	)

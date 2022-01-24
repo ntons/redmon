@@ -10,51 +10,43 @@ import (
 )
 
 var (
-	luaGet = newScript(`
-local b=redis.call("GET", KEYS[1])
-if not b then error("CACHE_MISS") end
-local d=cmsgpack.unpack(b)
-if d.rev==0 and ARGV[1] then
-  d.rev,d.val=d.rev+1,ARGV[1]
-  b=cmsgpack.pack(d)
-  redis.call("SET",KEYS[1],b)
-  if redis.call("SADD","` + xDirtySet + `",KEYS[1])>0 then
-    redis.call("LPUSH","` + xDirtyQue + `",KEYS[1])
-  end
+	luaGet = newScriptFormat(`
+local b = redis.call("GET", KEYS[1])
+if not b then return end
+local d = cmsgpack.unpack(b)
+if d.rev == 0 and ARGV[1] then
+  d.rev, d.val = d.rev+1, ARGV[1]
+  b = cmsgpack.pack(d)
+  redis.call("SET", KEYS[1], b)
+  if redis.call("SADD", "%s", KEYS[1]) > 0 then redis.call("LPUSH", "%s", KEYS[1]) end
 end
 return b
-`)
+`, xDirtySet, xDirtyQue)
 
-	luaSet = newScript(`
-local b=redis.call("GET",KEYS[1])
-if not b then error("CACHE_MISS") end
-local d=cmsgpack.unpack(b)
-d.rev,d.val=d.rev+1,ARGV[1]
-redis.call("SET",KEYS[1],cmsgpack.pack(d))
-if redis.call("SADD","` + xDirtySet + `",KEYS[1])>0 then
-  redis.call("LPUSH","` + xDirtyQue + `",KEYS[1])
-end
+	luaSet = newScriptFormat(`
+local b = redis.call("GET", KEYS[1])
+if not b then return end
+local d = cmsgpack.unpack(b)
+d.rev, d.val = d.rev+1, ARGV[1]
+redis.call("SET", KEYS[1], cmsgpack.pack(d))
+if redis.call("SADD", "%s", KEYS[1]) > 0 then redis.call("LPUSH", "%s", KEYS[1]) end
 return d.rev
-`)
+`, xDirtySet, xDirtyQue)
 
-	luaAdd = newScript(`
-local b=redis.call("GET",KEYS[1])
-if not b then error("CACHE_MISS") end
-local d=cmsgpack.unpack(b)
-if d.rev~=0 then return 0 end
-d.rev,d.val=d.rev+1,ARGV[1]
-redis.call("SET",KEYS[1],cmsgpack.pack(d))
-if redis.call("SADD","` + xDirtySet + `",KEYS[1])>0 then
-  redis.call("LPUSH","` + xDirtyQue + `",KEYS[1])
-end
+	luaAdd = newScriptFormat(`
+local b = redis.call("GET",KEYS[1])
+if not b then return end
+local d = cmsgpack.unpack(b)
+if d.rev ~= 0 then return 0 end
+d.rev, d.val = d.rev+1, ARGV[1]
+redis.call("SET", KEYS[1], cmsgpack.pack(d))
+if redis.call("SADD", "%s", KEYS[1]) > 0 then redis.call("LPUSH", "%s", KEYS[1]) end
 return 1
-`)
+`, xDirtySet, xDirtyQue)
 
 	luaLoad = newScript(`
-local b=redis.call("GET",KEYS[1])
-if not b or cmsgpack.unpack(b).rev<cmsgpack.unpack(ARGV[1]).rev then
-  redis.call("SET",KEYS[1],ARGV[1],"EX",86400)
-end
+local b = redis.call("GET",KEYS[1])
+if not b or cmsgpack.unpack(b).rev < cmsgpack.unpack(ARGV[1]).rev then redis.call("SET", KEYS[1], ARGV[1], "EX", 86400) end
 return 0
 `)
 )
@@ -158,6 +150,8 @@ func (cli *xClient) eval(
 	cmd *redis.Cmd) {
 	if cmd = cli.runScript(ctx, script, key, args...); isCacheMiss(cmd.Err()) {
 		if err := cli.load(ctx, key); err != nil {
+			cmd = redis.NewCmd(ctx)
+			cmd.SetErr(err)
 			return
 		}
 		cmd = cli.runScript(ctx, script, key, args...)
@@ -170,13 +164,6 @@ func (cli *xClient) runScript(
 	ctx context.Context, script *xScript, key string, args ...interface{}) (
 	cmd *redis.Cmd) {
 	cmd = script.Run(ctx, cli.rdb, []string{key}, args...)
-	if err := cmd.Err(); err != nil {
-		if err == redis.Nil {
-			cmd.SetErr(nil) // not regard redis.Nil as error
-		} else if isCacheMiss(err) {
-			cmd.SetErr(xErrCacheMiss)
-		}
-	}
 	if err := cmd.Err(); err != nil {
 		if isCacheMiss(err) {
 			cli.metrics.incrCacheMiss()
@@ -206,7 +193,7 @@ func (cli *xClient) get(
 		return
 	}
 	var data xRedisData
-	if err = msgpack.Unmarshal(fastStringToBytes(s), &data); err != nil {
+	if err = msgpack.Unmarshal(s2b(s), &data); err != nil {
 		cli.metrics.incrDataError()
 		return
 	}
@@ -248,13 +235,12 @@ func (cli *xClient) load(ctx context.Context, key string) (err error) {
 	var buf []byte
 	if buf, err = msgpack.Marshal(&xRedisData{
 		Rev: data.Rev,
-		Val: fastBytesToString(data.Val),
+		Val: b2s(data.Val),
 	}); err != nil {
 		cli.metrics.incrDataError()
 		return
 	}
-	if err = cli.runScript(
-		ctx, luaLoad, key, fastBytesToString(buf)).Err(); err != nil {
+	if err = cli.runScript(ctx, luaLoad, key, b2s(buf)).Err(); err != nil {
 		return
 	}
 	return

@@ -2,82 +2,77 @@ package remon
 
 import (
 	"context"
-	"fmt"
 	"sort"
 
 	"github.com/vmihailenco/msgpack/v4"
 )
 
-const (
-	luaEvalTmpl = `
-local b=redis.call("GET", KEYS[1])
-if not b then error("CACHE_MISS") end
-local d=cmsgpack.unpack(b)
-local f=assert(loadstring([[%s]]))
-local e={}
-setmetatable(e,{__index=_G})
-e.VALUE=d.val
-setfenv(f,e)
-local r=f()
-if d.val~=e.VALUE then
-  d.rev,d.val=d.rev+1,e.VALUE
-  redis.call("SET",KEYS[1],cmsgpack.pack(d))
-  if redis.call("SADD","` + xDirtySet + `",KEYS[1])>0 then
-    redis.call("LPUSH","` + xDirtyQue + `",KEYS[1])
-  end
+func newSandboxScript(src string) *xScript {
+	const tmpl = `
+local b = redis.call("GET", KEYS[1])
+if not b then return end
+local d = cmsgpack.unpack(b)
+local f = assert(loadstring([[%s]]))
+local e = {}
+setmetatable(e, {__index=_G})
+e.VALUE = d.val
+setfenv(f, e)
+local r = f()
+if d.val ~= e.VALUE then
+  d.rev, d.val = d.rev+1, e.VALUE
+  redis.call("SET", KEYS[1], cmsgpack.pack(d))
+  if redis.call("SADD", "%s", KEYS[1]) > 0 then redis.call("LPUSH", "%s", KEYS[1]) end
 end
-return r`
-)
-
-func newEvalScript(src string) *xScript {
-	return newScript(fmt.Sprintf(luaEvalTmpl, src))
+return r
+`
+	return newScriptFormat(tmpl, src, xDirtySet, xDirtyQue)
 }
 
 var (
-	luaPush = newEvalScript(`
-local d={seq=0,que={}}
-if #VALUE>0 then d=cmsgpack.unpack(VALUE) end
-local cap=tonumber(ARGV[2])
-if cap>0 and #d.que>=cap then
-  if ARGV[3]==1 then
-    while #d.que>=cap do table.remove(d.que,1) end
+	luaPush = newSandboxScript(`
+local d= {seq=0, que={}}
+if #VALUE > 0 then d = cmsgpack.unpack(VALUE) end
+local cap = tonumber(ARGV[2])
+if cap > 0 and #d.que >= cap then
+  if ARGV[3] == 1 then
+    while #d.que >= cap do table.remove(d.que, 1) end
   else
     return -1
   end
 end
-d.seq=d.seq+1
-d.que[#d.que+1]={id=d.seq,val=ARGV[1]}
-VALUE=cmsgpack.pack(d)
+d.seq = d.seq+1
+d.que[#d.que+1] = {id=d.seq, val=ARGV[1]}
+VALUE = cmsgpack.pack(d)
 return d.seq
 `)
 
-	luaPull = newEvalScript(`
-local d={seq=0,que={}}
-if #VALUE>0 then d=cmsgpack.unpack(VALUE) end
-local i,n,r=1,#d.que,{}
-for _,id in ipairs(ARGV) do
-  local j,v=#d.que,tonumber(id)
-  while i<=j do
-    local k=math.floor((i+j)/2)
-	if d.que[k].id<v then
-	  i=k+1
-	elseif d.que[k].id>v then
-	  j=k-1
+	luaPull = newSandboxScript(`
+local d = {seq=0, que={}}
+if #VALUE > 0 then d = cmsgpack.unpack(VALUE) end
+local i, n, r = 1, #d.que, {}
+for _, id in ipairs(ARGV) do
+  local j, v = #d.que, tonumber(id)
+  while i <= j do
+    local k = math.floor((i+j)/2)
+	if d.que[k].id < v then
+	  i = k+1
+	elseif d.que[k].id > v then
+	  j = k-1
 	else
-	  r[#r+1]=d.que[k].id
-	  table.remove(d.que,k)
+	  r[#r+1] = d.que[k].id
+	  table.remove(d.que, k)
 	  break
 	end
   end
 end
-if #d.que~=n then VALUE=cmsgpack.pack(d) end
+if #d.que ~= n then VALUE = cmsgpack.pack(d) end
 return r
 `)
 
-	luaClean = newEvalScript(`
-local d={seq=0,que={}}
-if #VALUE>0 then d=cmsgpack.unpack(VALUE) end
-if #d.que>0 then VALUE=cmsgpack.pack({seq=d.seq,que={}}) end
+	luaClean = newSandboxScript(`
+local d = {seq=0, que={}}
+if #VALUE > 0 then d = cmsgpack.unpack(VALUE) end
+if #d.que > 0 then VALUE = cmsgpack.pack({seq=d.seq, que={}}) end
 return #d.que
 `)
 )
@@ -121,7 +116,7 @@ func (cli xMailClient) List(
 		return
 	}
 	var data xMailData
-	if err = msgpack.Unmarshal(fastStringToBytes(val), &data); err != nil {
+	if err = msgpack.Unmarshal(s2b(val), &data); err != nil {
 		return
 	}
 	return data.Que, nil
@@ -150,7 +145,7 @@ func (cli xMailClient) Pull(
 	if len(ids) == 0 {
 		return
 	}
-	sort.Sort(xInt64Slice(ids)) // ARGV must be sorted
+	sort.Sort(int64Slice(ids)) // ARGV must be sorted
 	args := make([]interface{}, 0, len(ids))
 	for _, id := range ids {
 		args = append(args, id)
