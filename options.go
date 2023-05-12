@@ -6,28 +6,36 @@ import (
 )
 
 // Redis(key) -> Mongo(db,collection,_id)
-type MapKeyFunc func(key string) (db, collection, _id string)
+type KeyMappingFunc func(key string) (db, collection, _id string)
 
 // 同步成功回调函数
 type OnSyncSaveFunc func(key string) time.Duration
 
 // 同步失败回调函数
-type OnSyncErrorFunc func(err error) time.Duration
+type OnSyncFailFunc func(err error) time.Duration
 
 // 同步空闲回调函数
 type OnSyncIdleFunc func() time.Duration
 
-// Client/SyncClient xOptions
-type xOptions struct {
-	mapKeyFunc      MapKeyFunc
-	onSyncSaveFunc  OnSyncSaveFunc
-	onSyncErrorFunc OnSyncErrorFunc
-	onSyncIdleFunc  OnSyncIdleFunc
-}
+// Client Options
+type (
+	xOptions struct {
+		keyMappingFunc KeyMappingFunc
+		onSyncSaveFunc OnSyncSaveFunc
+		onSyncFailFunc OnSyncFailFunc
+		onSyncIdleFunc OnSyncIdleFunc
+	}
+	xFuncOption struct {
+		f func(o *xOptions)
+	}
+	Option interface {
+		apply(o *xOptions)
+	}
+)
 
 func (x *xOptions) mapKey(key string) (_, _, _ string) {
-	if x.mapKeyFunc != nil {
-		return x.mapKeyFunc(key)
+	if x.keyMappingFunc != nil {
+		return x.keyMappingFunc(key)
 	}
 	// default policy
 	a := strings.SplitN(key, ":", 3)
@@ -40,18 +48,21 @@ func (x *xOptions) mapKey(key string) (_, _, _ string) {
 		return "remon", "data", key
 	}
 }
+
 func (x *xOptions) onSyncSave(key string) time.Duration {
 	if x.onSyncSaveFunc != nil {
 		return x.onSyncSaveFunc(key)
 	}
 	return 0
 }
-func (x *xOptions) onSyncError(err error) time.Duration {
-	if x.onSyncErrorFunc != nil {
-		return x.onSyncErrorFunc(err)
+
+func (x *xOptions) onSyncFail(err error) time.Duration {
+	if x.onSyncFailFunc != nil {
+		return x.onSyncFailFunc(err)
 	}
 	return time.Second
 }
+
 func (x xOptions) onSyncIdle() time.Duration {
 	if x.onSyncIdleFunc != nil {
 		return x.onSyncIdleFunc()
@@ -59,73 +70,67 @@ func (x xOptions) onSyncIdle() time.Duration {
 	return time.Second
 }
 
-type Option interface {
-	apply(o *xOptions)
-}
-
-type xFuncOption struct {
-	f func(o *xOptions)
-}
-
 func (x xFuncOption) apply(o *xOptions) { x.f(o) }
 
-func WithKeyMap(f MapKeyFunc) Option {
-	return xFuncOption{func(o *xOptions) { o.mapKeyFunc = f }}
+func WithKeyMap(f KeyMappingFunc) Option {
+	return xFuncOption{func(o *xOptions) { o.keyMappingFunc = f }}
 }
 func OnSyncSave(f OnSyncSaveFunc) Option {
 	return xFuncOption{func(o *xOptions) { o.onSyncSaveFunc = f }}
 }
-func OnSyncError(f OnSyncErrorFunc) Option {
-	return xFuncOption{func(o *xOptions) { o.onSyncErrorFunc = f }}
+func OnSyncFail(f OnSyncFailFunc) Option {
+	return xFuncOption{func(o *xOptions) { o.onSyncFailFunc = f }}
 }
 func OnSyncIdle(f OnSyncIdleFunc) Option {
 	return xFuncOption{func(o *xOptions) { o.onSyncIdleFunc = f }}
 }
 
-// get method xOptions
-type GetOption interface {
-	apply(o *xGetOptions)
-}
-type xGetOptions struct {
-	// add or set atomically
-	addIfNotFound *string
-}
-type xFuncGetOption struct {
-	f func(o *xGetOptions)
-}
-
-func (f xFuncGetOption) apply(o *xGetOptions) { f.f(o) }
-
-func AddIfNotFound(v string) GetOption {
-	return xFuncGetOption{func(o *xGetOptions) { o.addIfNotFound = &v }}
-}
-
-// push method options
-type PushStrategy int
-
-const (
-	RejectOnFull     PushStrategy = 0
-	PullOldestOnFull PushStrategy = 1
+// Client.Get Options
+type (
+	xGetOptions struct {
+		// add or set atomically
+		addIfNotExists *string
+	}
+	xGetOptionFunc struct {
+		f func(o *xGetOptions)
+	}
+	GetOption interface {
+		apply(o *xGetOptions)
+	}
 )
 
-type PushOption interface {
-	apply(o *xPushOptions)
-}
-type xPushOptions struct {
-	// capacity of set
-	capacity int
-	// full strategy
-	strategy PushStrategy
-}
-type xFuncPushOption struct {
-	f func(o *xPushOptions)
+func (f xGetOptionFunc) apply(o *xGetOptions) { f.f(o) }
+
+func AddIfNotExists(v string) GetOption {
+	return xGetOptionFunc{func(o *xGetOptions) { o.addIfNotExists = &v }}
 }
 
-func (f xFuncPushOption) apply(o *xPushOptions) { f.f(o) }
+// Client.Push Options
+type (
+	xPushOptions struct {
+		// importance
+		importance int
+		// capacity of set
+		capacity int
+		// strategy on full
+		strategy int
+	}
+	xPushOptionFunc struct {
+		f func(o *xPushOptions)
+	}
+	PushOption interface {
+		apply(o *xPushOptions)
+	}
+)
 
+func (f xPushOptionFunc) apply(o *xPushOptions) { f.f(o) }
+
+func WithImportance(v int) PushOption {
+	return xPushOptionFunc{func(o *xPushOptions) { o.importance = v }}
+}
 func WithCapacity(v int) PushOption {
-	return xFuncPushOption{func(o *xPushOptions) { o.capacity = v }}
+	return xPushOptionFunc{func(o *xPushOptions) { o.capacity = v }}
 }
-func WithPushStrategy(v PushStrategy) PushOption {
-	return xFuncPushOption{func(o *xPushOptions) { o.strategy = v }}
+func WithRing() PushOption {
+	return xPushOptionFunc{func(o *xPushOptions) { o.strategy = 1 }}
 }

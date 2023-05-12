@@ -1,14 +1,3 @@
-package remon
-
-import (
-	"github.com/ntons/redis"
-)
-
-var (
-	luaScript = redis.NewScript(luaScriptSource)
-)
-
-const luaScriptSource = `
 -- 二分查找索引k，使得 f(a[1,...,k-1]) == false && f(a[k,...#a]) == true
 local function binarysearch(a, f)
     local i, j = 1, #a + 1
@@ -196,4 +185,3 @@ elseif cmd == "remon_sync" then
 else
     error("remon: bad command")
 end
-`

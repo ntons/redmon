@@ -17,7 +17,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/go-redis/redis/v8"
+	"github.com/ntons/redis"
 	"github.com/ntons/remon"
 	"go.mongodb.org/mongo-driver/mongo"
 	"go.mongodb.org/mongo-driver/mongo/options"
@@ -30,8 +30,7 @@ type Data struct {
 }
 
 var (
-	db     remon.Client
-	syncer *remon.Syncer
+	cli *remon.Client
 
 	localData      = make([]*Data, 0)
 	localDataMutex []sync.Mutex
@@ -42,13 +41,17 @@ var (
 )
 
 func Dial() {
-	rdb := redis.NewClient(&redis.Options{Addr: "localhost:6379"})
-	mdb, _ := mongo.NewClient(options.Client().ApplyURI("mongodb://localhost"))
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
+
+	rdb, _ := redis.Dial(ctx, "redis://localhost:6379")
+	rdb.FlushDB(ctx)
+
+	mdb, _ := mongo.NewClient(options.Client().ApplyURI("mongodb://localhost"))
 	mdb.Connect(ctx)
-	db = remon.New(rdb, mdb)
-	syncer = remon.NewSyncer(rdb, mdb)
+	mdb.Database("remon").Drop(ctx)
+
+	cli = remon.NewClient(rdb, mdb)
 }
 
 func RandPayload() string {
@@ -77,20 +80,9 @@ func RandIndex() (i int) {
 	)
 }
 
-func main() {
-
-	InitLocalData()
-
-	Dial()
-
+func doTest(ctx context.Context) {
 	var wg sync.WaitGroup
 
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
-	defer cancel()
-
-	go func() { syncer.Serve() }()
-
-	// 并发测试
 	for i := 0; i < 10; i++ {
 		wg.Add(1)
 		go func() {
@@ -111,8 +103,8 @@ func main() {
 					_ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 					defer cancel()
 
-					if rev, val, err := db.Get(_ctx, fmt.Sprintf("%d", i)); err != nil {
-						if err != remon.ErrNotFound {
+					if rev, val, err := cli.Get(_ctx, fmt.Sprintf("%d", i)); err != nil {
+						if err != remon.ErrNotExists {
 							fmt.Printf("failed to get data %d: %s\n", i, err)
 							return
 						}
@@ -126,7 +118,7 @@ func main() {
 					}
 
 					v := RandPayload()
-					rev, err := db.Set(_ctx, fmt.Sprintf("%d", i), v)
+					rev, err := cli.Set(_ctx, fmt.Sprintf("%d", i), v)
 					if err != nil {
 						fmt.Printf("failed to set data %d: %s\n", i, err)
 						return
@@ -144,11 +136,11 @@ func main() {
 	wg.Wait()
 
 	fmt.Printf("Count: %d\n", counter)
-	fmt.Printf("CacheHit:   %d\n", db.Metrics().CacheHit())
-	fmt.Printf("CacheMiss:  %d\n", db.Metrics().CacheMiss())
-	fmt.Printf("RedisError: %d\n", db.Metrics().RedisError())
-	fmt.Printf("MongoError: %d\n", db.Metrics().MongoError())
-	fmt.Printf("DataError:  %d\n", db.Metrics().DataError())
+	//fmt.Printf("CacheHit:   %d\n", db.Metrics().CacheHit())
+	//fmt.Printf("CacheMiss:  %d\n", db.Metrics().CacheMiss())
+	//fmt.Printf("RedisError: %d\n", db.Metrics().RedisError())
+	//fmt.Printf("MongoError: %d\n", db.Metrics().MongoError())
+	//fmt.Printf("DataError:  %d\n", db.Metrics().DataError())
 
 	// 检查数据完整性
 	for i := 0; i < len(localData); i++ {
@@ -158,7 +150,7 @@ func main() {
 		if d.Payload == "" {
 			continue
 		}
-		rev, val, err := db.Get(_ctx, fmt.Sprintf("%d", i))
+		rev, val, err := cli.Get(_ctx, fmt.Sprintf("%d", i))
 		if err != nil {
 			fmt.Printf("failed to get data: %d, %v\n", i, err)
 			continue
@@ -167,7 +159,32 @@ func main() {
 			fmt.Printf("data mismatch: %d, %d, %d, %d, %d\n", i, rev, d.Rev, len(val), len(d.Payload))
 		}
 	}
+}
 
-	syncer.Stop()
+func main() {
 
+	InitLocalData()
+
+	Dial()
+
+	var wg sync.WaitGroup
+	defer wg.Wait()
+
+	wg.Add(1)
+	go func() {
+		defer fmt.Println("sync finished")
+		defer wg.Done()
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+		defer cancel()
+		cli.Sync(ctx)
+	}()
+
+	wg.Add(1)
+	go func() {
+		defer fmt.Println("test finished")
+		defer wg.Done()
+		ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+		defer cancel()
+		doTest(ctx)
+	}()
 }
