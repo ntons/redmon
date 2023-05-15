@@ -108,10 +108,10 @@ func AddIfNotExists(v string) GetOption {
 // Client.Push Options
 type (
 	xPushOptions struct {
-		// importance
-		importance int
-		// capacity of set
-		capacity int
+		// importance [-128,127]
+		importance int8
+		// capacity of set [1,65535]
+		capacity uint16
 		// strategy on full
 		strategy int
 	}
@@ -125,10 +125,10 @@ type (
 
 func (f xPushOptionFunc) apply(o *xPushOptions) { f.f(o) }
 
-func WithImportance(v int) PushOption {
+func WithImportance(v int8) PushOption {
 	return xPushOptionFunc{func(o *xPushOptions) { o.importance = v }}
 }
-func WithCapacity(v int) PushOption {
+func WithCapacity(v uint16) PushOption {
 	return xPushOptionFunc{func(o *xPushOptions) { o.capacity = v }}
 }
 func WithRing() PushOption {
