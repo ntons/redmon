@@ -297,7 +297,7 @@ func TestMail2(t *testing.T) {
 	r.Del(ctx, key)
 
 	for i := int64(0); i < 10; i++ {
-		if id, err := cli.Push(ctx, key, val, WithImportance(int(i))); err != nil {
+		if id, err := cli.Push(ctx, key, val, WithImportance(uint8(i))); err != nil {
 			t.Fatalf("unexpected push err: %v", err)
 		} else if id != i*1e10+i+1 {
 			t.Fatalf("unexpected push id: %v", id)
