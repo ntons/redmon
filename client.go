@@ -42,6 +42,8 @@ type Mail struct {
 	Val string `msgpack:"val"`
 }
 
+func (m Mail) GetImportance() uint8 { return uint8(m.Id / 1e10) }
+
 // 客户端
 type Client struct {
 	*xOptions
