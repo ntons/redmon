@@ -18,7 +18,7 @@ import (
 	"time"
 
 	"github.com/ntons/redis"
-	"github.com/ntons/remon"
+	"github.com/ntons/redmon"
 	"go.mongodb.org/mongo-driver/mongo"
 	"go.mongodb.org/mongo-driver/mongo/options"
 )
@@ -30,7 +30,7 @@ type Data struct {
 }
 
 var (
-	cli *remon.Client
+	cli *redmon.Client
 
 	localData      = make([]*Data, 0)
 	localDataMutex []sync.Mutex
@@ -49,9 +49,9 @@ func Dial() {
 
 	mdb, _ := mongo.NewClient(options.Client().ApplyURI("mongodb://localhost"))
 	mdb.Connect(ctx)
-	mdb.Database("remon").Drop(ctx)
+	mdb.Database("redmon").Drop(ctx)
 
-	cli = remon.NewClient(rdb, mdb)
+	cli = redmon.NewClient(rdb, mdb)
 }
 
 func RandPayload() string {
@@ -104,7 +104,7 @@ func doTest(ctx context.Context) {
 					defer cancel()
 
 					if rev, val, err := cli.Get(_ctx, fmt.Sprintf("%d", i)); err != nil {
-						if err != remon.ErrNotExists {
+						if err != redmon.ErrNotExists {
 							fmt.Printf("failed to get data %d: %s\n", i, err)
 							return
 						}

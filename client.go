@@ -1,4 +1,4 @@
-package remon
+package redmon
 
 import (
 	"context"
@@ -81,7 +81,7 @@ func (cli *Client) rget(ctx context.Context, key string, opts xGetOptions) (_ in
 	if opts.addIfNotExists != nil {
 		args = append(args, *opts.addIfNotExists)
 	}
-	s, err := cli.run(ctx, "remon_get", key, args...).Text()
+	s, err := cli.run(ctx, "redmon_get", key, args...).Text()
 	if err != nil {
 		return
 	}
@@ -109,7 +109,7 @@ func (cli *Client) Set(ctx context.Context, key, val string) (rev int64, err err
 
 // 设置缓存数据
 func (cli *Client) rset(ctx context.Context, key, val string) (rev int64, err error) {
-	return cli.run(ctx, "remon_set", key, val).Int64()
+	return cli.run(ctx, "redmon_set", key, val).Int64()
 }
 
 // 新增数据，如果指定数据不在缓存里会自动从DB加载
@@ -126,7 +126,7 @@ func (cli *Client) Add(ctx context.Context, key, val string) (err error) {
 
 // 新增缓存数据
 func (cli *Client) radd(ctx context.Context, key, val string) error {
-	if r, err := cli.run(ctx, "remon_add", key, val).Int64(); err != nil {
+	if r, err := cli.run(ctx, "redmon_add", key, val).Int64(); err != nil {
 		return err
 	} else if r == 0 {
 		return ErrAlreadyExists
@@ -165,7 +165,7 @@ func (cli *Client) Push(ctx context.Context, key, val string, opts ...PushOption
 // 添加缓存邮件
 func (cli *Client) rpush(ctx context.Context, key, val string, opts xPushOptions) (id int64, err error) {
 	var args = []any{val, opts.importance, opts.capacity, opts.strategy}
-	if id, err = cli.run(ctx, "remon_mb_push", key, args...).Int64(); err != nil {
+	if id, err = cli.run(ctx, "redmon_mb_push", key, args...).Int64(); err != nil {
 		return
 	}
 	if id == -1 {
@@ -194,7 +194,7 @@ func (cli *Client) rpull(ctx context.Context, key string, ids ...int64) (pulled 
 	for _, id := range ids {
 		args = append(args, id)
 	}
-	r, err := cli.run(ctx, "remon_mb_pull", key, args...).Result()
+	r, err := cli.run(ctx, "redmon_mb_pull", key, args...).Result()
 	if err != nil {
 		return
 	}
@@ -228,15 +228,15 @@ func (cli *Client) load(ctx context.Context, key string) (err error) {
 	}); err != nil {
 		return
 	}
-	if err = cli.run(ctx, "remon_load", key, b2s(buf)).Err(); err != nil {
+	if err = cli.run(ctx, "redmon_load", key, b2s(buf)).Err(); err != nil {
 		return
 	}
 	return
 }
 
-////////////////////////////////////////////////////////////////////////////////
+// //////////////////////////////////////////////////////////////////////////////
 // Syncing
-////////////////////////////////////////////////////////////////////////////////
+// //////////////////////////////////////////////////////////////////////////////
 func (cli *Client) Sync(ctx context.Context) {
 	var backoff *time.Timer
 	for {
@@ -274,12 +274,12 @@ func (cli *Client) Sync(ctx context.Context) {
 
 // peek top dirty key and data
 func (cli *Client) peek(ctx context.Context) (string, xRedisData, error) {
-	return cli.getSyncRes(luaScript.Run(ctx, cli.rdb, []string{}, "remon_sync"))
+	return cli.getSyncRes(luaScript.Run(ctx, cli.rdb, []string{}, "redmon_sync"))
 }
 
 // clean dirty flag and make key volatile, then peek the next
 func (cli *Client) next(ctx context.Context, key string, rev int64) (string, xRedisData, error) {
-	return cli.getSyncRes(luaScript.Run(ctx, cli.rdb, []string{key}, "remon_sync", rev))
+	return cli.getSyncRes(luaScript.Run(ctx, cli.rdb, []string{key}, "redmon_sync", rev))
 }
 
 func (*Client) getSyncRes(r *redis.Cmd) (key string, data xRedisData, err error) {

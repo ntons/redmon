@@ -1,4 +1,4 @@
-package remon
+package redmon
 
 import (
 	"strings"
@@ -43,9 +43,9 @@ func (x *xOptions) mapKey(key string) (_, _, _ string) {
 	case 3:
 		return a[0], a[1], a[2]
 	case 2:
-		return "remon", a[0], a[1]
+		return "redmon", a[0], a[1]
 	default:
-		return "remon", "data", key
+		return "redmon", "data", key
 	}
 }
 

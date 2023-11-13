@@ -1,4 +1,4 @@
-package remon
+package redmon
 
 import (
 	"context"
@@ -166,7 +166,7 @@ func TestLoad(t *testing.T) {
 
 	var (
 		database   = "test"
-		collection = "remon"
+		collection = "redmon"
 		_id        = fmt.Sprintf("%d", rand.Int())
 		key        = fmt.Sprintf("%s:%s:%s", database, collection, _id)
 		val        = "hello"

@@ -1,4 +1,4 @@
-package remon
+package redmon
 
 import (
 	"errors"
@@ -7,9 +7,9 @@ import (
 )
 
 var (
-	ErrAlreadyExists = errors.New("remon: already exists")
-	ErrNotExists     = errors.New("remon: not exists")
-	ErrMailBoxFull   = errors.New("remon: mail box full")
+	ErrAlreadyExists = errors.New("redmon: already exists")
+	ErrNotExists     = errors.New("redmon: not exists")
+	ErrMailBoxFull   = errors.New("redmon: mail box full")
 )
 
 // If you know for sure that the byte slice won't be mutated,

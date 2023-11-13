@@ -1,4 +1,4 @@
-module github.com/ntons/remon
+module github.com/ntons/redmon
 
 go 1.18
 
